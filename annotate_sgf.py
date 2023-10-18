@@ -13,6 +13,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from copy import deepcopy
 from typing import List
+from einops import repeat
+import cProfile
+import pstats
 sys.path.append("/home/ubuntu/katago_pessimize/KataGo/python")
 
 
@@ -76,7 +79,7 @@ def get_outputs(gss:GameState | List[GameState], rules):
         bin_input_data = bin_input_data.reshape([batch_size,1,pos_len*pos_len,-1])
         featureses = [Features(model.config,pos_len) for i in range(batch_size)]
         for i, gs in enumerate(gss):
-            featureses[i].fill_row_features(gs.board,pla,opp,gs.boards,gs.moves,move_idx[i],rules,bin_input_data[i],global_input_data,idx=0)
+            featureses[i].fill_row_features(gs.board,pla[i],opp[i],gs.boards,gs.moves,move_idx[i],rules,bin_input_data[i],global_input_data,idx=0)
         bin_input_data = bin_input_data.reshape([batch_size,pos_len,pos_len,-1])
         bin_input_data = np.transpose(bin_input_data,axes=(0,3,1,2))
 
@@ -84,8 +87,9 @@ def get_outputs(gss:GameState | List[GameState], rules):
         # symmetry = 0
         # model_outputs = model(apply_symmetry(batch["binaryInputNCHW"],symmetry),batch["globalInputNC"])
 
-        print(bin_input_data.shape)
-        print(global_input_data.shape)
+        global_input_data = repeat(global_input_data, '1 ... -> batch ...', batch=batch_size)
+        # print(bin_input_data.shape)
+        # print(global_input_data.shape)
         model_outputs = model(
             torch.tensor(bin_input_data, dtype=torch.float32).to(DEVICE),
             torch.tensor(global_input_data, dtype=torch.float32).to(DEVICE),
@@ -283,7 +287,7 @@ def get_training_data_from_sgf(sgf_filename):
     values = []
     move_values = []
     for game_move in tqdm(moves[:5]):
-        print(f"playing {game_move}")
+        # print(f"playing {game_move}")
         gs.play(game_move[0], game_move[1])
         board_str = '\n' + gs.board.to_string().strip()
         # print(board_str)
@@ -293,26 +297,37 @@ def get_training_data_from_sgf(sgf_filename):
 
         # make all possible moves from this position
         this_values = dict()
-        for move in range(5): # range(metadata.size ** 2):
+        gss = []
+        for move in range(metadata.size ** 2):
             if gs.board.would_be_legal(gs.board.pla, move):
                 gs_copy = deepcopy(gs)
                 gs_copy.play(gs.board.pla, move)
-                outputs = get_outputs(gs_copy, rules)
-                this_values[move] = outputs["value"][0] + outputs["value"][2]/2
+                gss.append(gs_copy)
+        outputs = get_outputs(gss, rules)
+        this_values[move] = outputs["value"][0] + outputs["value"][2]/2
         move_values.append(this_values)
 
 
 
     print(values)
-    return values, gs
+    return values, move_values, gs
 
 
 # get first file in SGF_DIR
 sgf_filename = os.path.join(SGF_DIR, os.listdir(SGF_DIR)[2])
 # sgf_filename = "blood_vomit.sgf"
-values, gs = get_training_data_from_sgf(sgf_filename)
 
-print(gs.board.to_string())
+cProfile.run('values, move_values, gs = get_training_data_from_sgf(sgf_filename)', 'output.pstats')
+
+# print(gs.board.to_string())
+
+# %%
+
+# Create a pstats object
+p = pstats.Stats('output.pstats')
+
+# Sort the statistics by the cumulative time and print the first few lines
+p.sort_stats('cumulative').print_stats(20)
 
 # %%
 
