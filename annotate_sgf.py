@@ -87,6 +87,7 @@ class KataGo:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            # bufsize=1,
         )
         self.katago = katago
 
@@ -126,8 +127,10 @@ class KataGo:
         query["includePolicy"] = False
         if max_visits is not None:
             query["maxVisits"] = max_visits
-
-        self.katago.stdin.write((json.dumps(query) + "\n").encode())
+        query = (json.dumps(query) + "\n").encode()
+        # print(f"{len(query)=}")
+        # time.sleep(0.001)
+        self.katago.stdin.write(query)
         self.katago.stdin.flush()
 
         # print(json.dumps(query))
@@ -135,6 +138,7 @@ class KataGo:
     def get_response(self):
         line = ""
         while line == "":
+            self.katago.stdout.flush()
             if self.katago.poll():
                 time.sleep(1)
                 raise Exception("Unexpected katago exit")
@@ -213,7 +217,7 @@ CONFIG_PATH = "/home/ubuntu/katago_pessimize/analysis.cfg"
 MODEL_PATH = "/home/ubuntu/katago_pessimize/kata1-b18c384nbt-s7709731328-d3715293823.bin.gz"
 
 elapsed_out = []
-def get_training_data_from_sgf(katago:KataGo, sgf_filename):
+def get_training_data_from_sgf(katago:KataGo, sgf_filename, min_move=290, max_move=300):
     global rules
     global elapsed_out
     metadata, setup, moves, rules = load_sgf_moves_exn(sgf_filename)
@@ -234,12 +238,13 @@ def get_training_data_from_sgf(katago:KataGo, sgf_filename):
     values = []
     move_values = []
     start_time = time.time()
-    queries = 0
-    for game_move in tqdm(moves[:5]):
-        # print(f"playing {game_move}")
+    # queries = 0
+    for i, game_move in tqdm(enumerate(moves)):
+        print(f"playing {game_move}")
         gs.play(game_move[0], game_move[1])
         board_str = '\n' + gs.board.to_string().strip()
         # print(board_str)
+        if i < min_move: continue
 
         # make all possible moves from this position
         this_values = dict()
@@ -248,22 +253,15 @@ def get_training_data_from_sgf(katago:KataGo, sgf_filename):
             if gs.board.would_be_legal(gs.board.pla, move):
                 query_moves = [('_bw'[color], (gs.board.loc_x(loc), gs.board.loc_y(loc))) for color, loc in gs.moves + [(gs.board.pla, move)]]
                 # print(query_moves)
+                # queries += 1
                 katago.query(query_board, query_moves, komi)
-                queries += 1
+                # if queries > 5:
+                    # queries -= 1
+                output = katago.get_response()
+                if 'rootInfo' in output: values.append(output['rootInfo']["winrate"])
                 # if queries >= 100:
                 #     queries = 0
-    # outputs = katago.get_all_responses()
-    time.sleep(4)
-    for _ in range(queries):
-        before_out = time.time()
-        output = katago.get_response()
-        elapsed_out.append(time.time() - before_out)
-        if 'rootInfo' in output: values.append(output['rootInfo']["winrate"])
-    # for output in outputs:
 
-                # for move in range(metadata.size ** 2):
-
-            
         move_values.append(this_values)
 
     end_time = time.time()
@@ -278,8 +276,8 @@ sgf_filename = os.path.join(SGF_DIR, os.listdir(SGF_DIR)[2])
 
 katago = KataGo(KATAGO_PATH, CONFIG_PATH, MODEL_PATH)
 try:
-    cProfile.run('values, move_values, gs = get_training_data_from_sgf(katago, sgf_filename)', 'output.pstats')
-    # values, move_values, gs = get_training_data_from_sgf(katago, sgf_filename)
+    # cProfile.run('values, move_values, gs = get_training_data_from_sgf(katago, sgf_filename)', 'output.pstats')
+    values, move_values, gs = get_training_data_from_sgf(katago, sgf_filename)
     katago.close()
 except KeyboardInterrupt:
     katago.close()
@@ -293,7 +291,7 @@ except Exception as e:
 
 # %%
 
-sns.lineplot(elapsed_out)
+# sns.histplot(elapsed_out)
 # %%
 
 # Create a pstats object
