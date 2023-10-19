@@ -45,6 +45,7 @@ from tqdm import tqdm
 # %%
 
 SGF_DIR = 'sgf_downloads'
+ANNOTATION_DIR = 'annotations'
 TRAINING_DIR = 'training_data'
 CHECKPOINT_FILE = 'kg_checkpoint/kata1-b18c384nbt-s7709731328-d3715293823/model.ckpt'
 DEVICE = 'cuda'
@@ -80,8 +81,10 @@ def sgfmill_to_str(move: Move) -> str:
 
 class KataGo:
 
-    def __init__(self, katago_path: str, config_path: str, model_path: str):
+    def __init__(self, katago_path: str, config_path: str, model_path: str, filename: str):
         self.query_counter = 0
+        # open file to write stdout to
+        self.out_file = open(os.path.join(ANNOTATION_DIR, filename + '.stdout'), 'w')
         katago = subprocess.Popen(
             [katago_path, "analysis", "-config", config_path, "-model", model_path],
             stdin=subprocess.PIPE,
@@ -103,8 +106,35 @@ class KataGo:
         self.stderrthread = Thread(target=printforever)
         self.stderrthread.start()
 
+        self.n_writes = 0
+        def write_to_outfile():
+            pbar = tqdm()
+            while katago.poll() is None and not self.katago.stdout.closed:
+                data = katago.stdout.readline()
+                # time.sleep(0)
+                if data:
+                    pbar.update(1)
+                    self.n_writes += 1
+                    # print(f"Writing {self.n_writes}")
+                    line = data.decode().strip()
+                    json_object = json.loads(line)
+                    out_object = {}
+                    out_object['id'] = json_object['id']
+                    out_object['winrate'] = json_object['rootInfo']['winrate']
+                    self.out_file.write(json.dumps(out_object) + '\n')
+            print(f"Done writing {self.n_writes} lines")
+            if self.katago.stdout.closed: return
+            data = katago.stdout.read()
+            if data:
+                self.out_file.write(data.decode())
+        self.stdoutthread = Thread(target=write_to_outfile)
+        self.stdoutthread.start()
+
+
     def close(self):
         self.katago.stdin.close()
+        self.stdoutthread.join()
+        self.out_file.close()
 
 
     def query(self, initial_board: sgfmill.boards.Board, moves: List[Tuple[Color,Move]], komi: float, max_visits=None):
@@ -115,11 +145,11 @@ class KataGo:
 
         query["moves"] = [(color,sgfmill_to_str(move)) for color, move in moves]
         query["initialStones"] = []
-        for y in range(initial_board.side):
-            for x in range(initial_board.side):
-                color = initial_board.get(y,x)
-                if color:
-                    query["initialStones"].append((color,sgfmill_to_str((y,x))))
+        # for y in range(initial_board.side):
+        #     for x in range(initial_board.side):
+        #         color = initial_board.get(y,x)
+        #         if color:
+        #             query["initialStones"].append((color,sgfmill_to_str((y,x))))
         query["rules"] = "Chinese"
         query["komi"] = komi
         query["boardXSize"] = initial_board.side
@@ -216,10 +246,11 @@ KATAGO_PATH = "/home/ubuntu/katago_pessimize/kg_release/katago"
 CONFIG_PATH = "/home/ubuntu/katago_pessimize/analysis.cfg"
 MODEL_PATH = "/home/ubuntu/katago_pessimize/kata1-b18c384nbt-s7709731328-d3715293823.bin.gz"
 
-elapsed_out = []
-def get_training_data_from_sgf(katago:KataGo, sgf_filename, min_move=290, max_move=300):
+def get_query_move(color, loc, board):
+    return ('_bw'[color], (board.loc_x(loc), board.loc_y(loc)) if loc != Board.PASS_LOC else "pass")
+
+def get_training_data_from_sgf(katago:KataGo, sgf_filename, min_move=0, max_move=300):
     global rules
-    global elapsed_out
     metadata, setup, moves, rules = load_sgf_moves_exn(sgf_filename)
     print(f"Loaded {sgf_filename}")
     print(f"Metadata: {metadata}")
@@ -239,8 +270,8 @@ def get_training_data_from_sgf(katago:KataGo, sgf_filename, min_move=290, max_mo
     move_values = []
     start_time = time.time()
     # queries = 0
-    for i, game_move in tqdm(enumerate(moves)):
-        print(f"playing {game_move}")
+    for i, game_move in tqdm(enumerate(moves[:max_move])):
+        # print(f"playing {game_move}")
         gs.play(game_move[0], game_move[1])
         board_str = '\n' + gs.board.to_string().strip()
         # print(board_str)
@@ -248,36 +279,37 @@ def get_training_data_from_sgf(katago:KataGo, sgf_filename, min_move=290, max_mo
 
         # make all possible moves from this position
         this_values = dict()
+        query_moves = [get_query_move(color, loc, gs.board) for color, loc in gs.moves]
         for move in range(metadata.size ** 2):
             move = move + 19 + 1
             if gs.board.would_be_legal(gs.board.pla, move):
-                query_moves = [('_bw'[color], (gs.board.loc_x(loc), gs.board.loc_y(loc))) for color, loc in gs.moves + [(gs.board.pla, move)]]
                 # print(query_moves)
                 # queries += 1
-                katago.query(query_board, query_moves, komi)
+                katago.query(query_board, query_moves + [get_query_move(gs.board.pla, move, gs.board)], komi)
                 # if queries > 5:
                     # queries -= 1
-                output = katago.get_response()
-                if 'rootInfo' in output: values.append(output['rootInfo']["winrate"])
+                # output = katago.get_response()
+                # if 'rootInfo' in output: values.append(output['rootInfo']["winrate"])
                 # if queries >= 100:
                 #     queries = 0
 
         move_values.append(this_values)
 
     end_time = time.time()
-    print(f"Time: {end_time - start_time:.4f}")
+    print(f"Querying finished in time: {end_time - start_time:.4f}. Now waiting for gpu...")
     # print(values)
     return values, move_values, gs
 
 
 # get first file in SGF_DIR
-sgf_filename = os.path.join(SGF_DIR, os.listdir(SGF_DIR)[2])
+sgf_filename = os.listdir(SGF_DIR)[2]
+sgf_rel_path = os.path.join(SGF_DIR, sgf_filename)
 # sgf_filename = "blood_vomit.sgf"
 
-katago = KataGo(KATAGO_PATH, CONFIG_PATH, MODEL_PATH)
+katago = KataGo(KATAGO_PATH, CONFIG_PATH, MODEL_PATH, sgf_filename)
 try:
-    # cProfile.run('values, move_values, gs = get_training_data_from_sgf(katago, sgf_filename)', 'output.pstats')
-    values, move_values, gs = get_training_data_from_sgf(katago, sgf_filename)
+    cProfile.run('values, move_values, gs = get_training_data_from_sgf(katago, sgf_rel_path)', 'output.pstats')
+    # values, move_values, gs = get_training_data_from_sgf(katago, sgf_rel_path)
     katago.close()
 except KeyboardInterrupt:
     katago.close()
