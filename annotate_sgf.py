@@ -183,7 +183,7 @@ MODEL_PATH = "/home/ubuntu/katago_pessimize/kata1-b18c384nbt-s7709731328-d371529
 def get_query_move(color, loc, board):
     return ('_bw'[color], (board.loc_x(loc), board.loc_y(loc)) if loc != Board.PASS_LOC else "pass")
 
-def get_training_data_from_sgf(katago:KataGo, sgf_filename, min_move=50, max_move=150, verbose=False):
+def get_training_data_from_sgf(katago:KataGo, sgf_filename, min_move=0, max_move=150, verbose=False):
     metadata, setup, moves, rules = load_sgf_moves_exn(sgf_filename)
     print(f"Loaded {sgf_filename}")
     print(f"Metadata: {metadata}")
@@ -212,11 +212,12 @@ def get_training_data_from_sgf(katago:KataGo, sgf_filename, min_move=50, max_mov
         # make all possible moves from this position
         this_values = dict()
         query_moves = [get_query_move(color, loc, gs.board) for color, loc in gs.moves]
-        for move in range(metadata.size ** 2):
-            move = move + 19 + 1
-            if gs.board.would_be_legal(gs.board.pla, move):
-                n_queries += 1
-                katago.query(query_board, query_moves + [get_query_move(gs.board.pla, move, gs.board)], komi)
+        print(f"{query_moves=}")
+        for move_x in range(metadata.size):
+            for move_y in range(metadata.size):
+                if gs.board.would_be_legal(gs.board.pla, Board.loc_static(move_x, move_y, metadata.size)):
+                    n_queries += 1
+                    katago.query(query_board, query_moves + [('_bw'[gs.board.pla], move_y, move_x)], komi)
 
     end_time = time.time()
     print(f"Querying finished in time: {end_time - start_time:.4f}. Now waiting for gpu...")
@@ -251,7 +252,7 @@ def annotate_all_games(overwrite=False, max_games=None, verbose=False):
         if n_queries != n_writes:
             print(f"Warning: {n_queries} queries but {n_writes} writes on file {sgf_filename}")
         
-annotate_all_games(overwrite=False, verbose=False, max_games=20)
+annotate_all_games(overwrite=True, verbose=True, max_games=1000)
 
 # %%
 
