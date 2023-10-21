@@ -16,6 +16,7 @@ from typing import List, Union
 from torch import Tensor
 from torch.nn.modules.module import Module
 import transformer_lens as tl
+import json
 from transformer_lens.hook_points import HookedRootModule, HookPoint
 sys.path.append("/home/ubuntu/katago_pessimize/KataGo/python")
 
@@ -33,6 +34,7 @@ from tqdm import tqdm
 
 SGF_DIR = 'sgf_downloads'
 TRAINING_DIR = 'training_data'
+ANNOTATIONS_DIR = 'annotations'
 CHECKPOINT_FILE = 'kg_checkpoint/kata1-b18c384nbt-s7709731328-d3715293823/model.ckpt'
 DEVICE = 'cuda'
 pos_len = 19
@@ -89,7 +91,7 @@ class HookedModuleWrapper(HookedRootModule):
                     new_submod = HookedModuleWrapper(subsubmod, name=f'{key}.{i}', recursive=True)
                     submod[i] = new_submod
                 continue
-            print(f'wrapping {key}:{type(submod)}')
+            # print(f'wrapping {key}:{type(submod)}')
             new_submod = HookedModuleWrapper(submod, name='hook_' + key, recursive=True)
             self.mod.__setattr__(key, new_submod)
 
@@ -97,9 +99,30 @@ class HookedModuleWrapper(HookedRootModule):
        result = self.mod.forward(*args, **kwrags)
        return self.hook_point(result)
    
-tl_model = HookedModuleWrapper(HookedModuleWrapper(model, recursive=True), recursive=True)
+tl_model = HookedModuleWrapper(model, recursive=True)
 
 # TODO add tests for HookedModuleWrapper
+
+# %%
+
+def load_annotations(sgf_filename, size=19, start_move=52, end_move=152):
+    # Loads everything into a tensor
+    annotations_relpath = os.path.join(ANNOTATIONS_DIR, sgf_filename + ".stdout")
+    with open(annotations_relpath, 'r') as f:
+        annotations = f.read()
+    annotations = annotations.split('\n')
+    result = torch.zeros((end_move - start_move, Board(size).arrsize)) + torch.nan
+    for line in annotations:
+        if not line: continue
+        print(line)
+        annotation = json.loads(line)
+        loc = Board.loc_static(*map(int,annotation['loc'].split()), size)
+        print(loc)
+        result[annotation['turnNumber'] - start_move, loc] = annotation['winrate']
+    return result
+sgf_filename = os.listdir(SGF_DIR)[2]
+annotated_values = load_annotations(sgf_filename)
+
 
 # %%
 
@@ -353,16 +376,15 @@ def get_training_data_from_sgf(sgf_filename):
                 this_values[move] = outputs["value"][0] + outputs["value"][2]/2
         move_values.append(this_values)
 
-
-
     print(values)
     return values, gs
 
 
 # get first file in SGF_DIR
-sgf_filename = os.path.join(SGF_DIR, os.listdir(SGF_DIR)[2])
+sgf_filename = os.listdir(SGF_DIR)[2]
+sgf_relpath = os.path.join(SGF_DIR, sgf_filename)
 # sgf_filename = "blood_vomit.sgf"
-values, gs = get_training_data_from_sgf(sgf_filename)
+values, gs = get_training_data_from_sgf(sgf_relpath)
 
 print(gs.board.to_string())
 
