@@ -67,13 +67,14 @@ class HookedModuleWrapper(HookedRootModule):
     """
     Wraps any module, adding a hook after the output.
     """
-    def __init__(self, mod:torch.nn.Module, name='model', recursive=False, hook_self=False):
+    def __init__(self, mod:torch.nn.Module, name='model', recursive=False, hook_self=True):
         super().__init__()
         self.mod = deepcopy(mod)
         self.hook_self = hook_self
-        hook_point = HookPoint()
-        hook_point.name = name
-        self.hook_point = hook_point
+        if hook_self:
+            hook_point = HookPoint()
+            hook_point.name = name
+            self.hook_point = hook_point
         if recursive: self.wrap_hookpoints_recursively()
         # TODO set names for all HookedSubmoduleWrappers
         self.setup()
@@ -103,7 +104,7 @@ class HookedModuleWrapper(HookedRootModule):
        assert isinstance(result, Tensor)
        return self.hook_point(result)
    
-tl_model = HookedModuleWrapper(model, recursive=True)
+tl_model = HookedModuleWrapper(model, recursive=True, hook_self=False)
 
 # TODO add tests for HookedModuleWrapper
 
