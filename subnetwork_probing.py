@@ -244,7 +244,7 @@ def get_training_data_from_sgf(sgf_filename):
         board_str = '\n' + gs.board.to_string().strip()
         # print(board_str)
 
-        outputs = get_outputs(gs, rules)
+        outputs = get_policy(gs, rules)
         policies.append(outputs["policy0"])
 
     print(policies)
