@@ -128,10 +128,6 @@ sgf_filename = os.listdir(SGF_DIR)[2]
 annotated_values = load_annotations(sgf_filename)
 
 # %%
-
-# def loss_fn(policy_probs, annotated_values):
-#     pass
-
 # %%
 features = Features(model_config, pos_len)
 
@@ -188,12 +184,24 @@ def get_policy(gs:GameState, rules, cache=True):
             scorebelief_logits, # N, 2 * (self.pos_len*self.pos_len + EXTRA_SCORE_DISTR_RADIUS)
         ) = (x[0] for x in outputs[0]) # N = 0
 
-        policy0 = torch.nn.functional.softmax(policy_logits[0,:],dim=0).cpu().numpy()
+        policy0 = torch.nn.functional.softmax(policy_logits[0,:],dim=0)
+
+        board = gs.board
+
+        probs0 = torch.zeros(board.arrsize)
+
+        for i in range(len(policy0)):
+            move = features.tensor_pos_to_loc(i,board)
+            if i == len(policy0)-1:
+                pass
+                # probs0[Board.PASS_LOC] = policy0[i]
+            elif board.would_be_legal(board.pla,move):
+                probs0[move] = policy0[i]
 
         return {
             "policy0": policy0,
             # "policy1": policy1,
-            # "moves_and_probs0": moves_and_probs0,
+            "probs0": probs0,
             # "moves_and_probs1": moves_and_probs1,
             # "value": value,
             # "td_value": td_value,
@@ -222,8 +230,27 @@ def get_policy(gs:GameState, rules, cache=True):
         }
 
 # %%
+def loss_fn(policy_probs, annotated_values, pla:int):
+    if policy_probs.shape != annotated_values.shape:
+        raise Exception(f"policy_probs.shape {policy_probs.shape} != annotated_values.shape {annotated_values.shape}")
+    assert pla in [1, 2]
+    if pla == 2: # all annotated values are black's winrate
+        annotated_values = 1 - annotated_values
+    # Policy should be 0 wherever annotated value is nan
+    nan_mask = torch.isnan(annotated_values)
+    if policy_probs[nan_mask].nonzero().shape[0] != 0:
+        print(f"Warning: policy_probs has non-zero values where annotated_values is nan, at {policy_probs[nan_mask].nonzero()}")
 
-def get_training_data_from_sgf(sgf_filename):
+    annotated_values = torch.nan_to_num(annotated_values, nan=-torch.inf)
+    annotated_values = annotated_values.max() - annotated_values # regrets
+    annotated_values[nan_mask] = 0
+    if (policy_probs.sum() - 1).abs() > 1e-4:
+        print("Warning: sum(probs) != 1")
+    return (policy_probs * annotated_values).sum()
+
+# %%
+
+def calc_game_regrets(sgf_filename, start_move=52, end_move=152):
     global rules
     metadata, setup, moves, rules = load_sgf_moves_exn(sgf_filename)
     print(f"Loaded {sgf_filename}")
@@ -237,29 +264,33 @@ def get_training_data_from_sgf(sgf_filename):
     #     gs.play(move[0], move[1])
     # print(gs.board.to_string())
     policies = []
-    move_values = []
-    for game_move in tqdm(moves[:5]):
-        print(f"playing {game_move}")
+    regrets = []
+    for move_n, game_move in tqdm(enumerate(moves[:end_move])):
+        # print(f"playing {game_move}")
         gs.play(game_move[0], game_move[1])
         board_str = '\n' + gs.board.to_string().strip()
         # print(board_str)
+        if move_n >= start_move:
+            outputs = get_policy(gs, rules)
+            policies.append(outputs["policy0"])
+            loss = loss_fn(outputs['probs0'], annotated_values[move_n - start_move], gs.board.pla)
+            regrets.append(loss)
 
-        outputs = get_policy(gs, rules)
-        policies.append(outputs["policy0"])
-
-    print(policies)
-    return policies, gs
+    # print(policies)
+    return policies, regrets, gs
 
 
 # get first file in SGF_DIR
 sgf_filename = os.listdir(SGF_DIR)[2]
 sgf_relpath = os.path.join(SGF_DIR, sgf_filename)
 # sgf_filename = "blood_vomit.sgf"
-values, gs = get_training_data_from_sgf(sgf_relpath)
+policies, regrets, gs = calc_game_regrets(sgf_relpath)
 
 print(gs.board.to_string())
 
+print(regrets)
+
 # %%
 
-sns.lineplot(data=values[::2])
+sns.lineplot(y=[r.item() for r in regrets], x=np.arange(52, 152))
 # %%
