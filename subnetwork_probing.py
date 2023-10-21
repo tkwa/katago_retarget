@@ -67,9 +67,10 @@ class HookedModuleWrapper(HookedRootModule):
     """
     Wraps any module, adding a hook after the output.
     """
-    def __init__(self, mod:torch.nn.Module, name='model', recursive=False):
+    def __init__(self, mod:torch.nn.Module, name='model', recursive=False, hook_self=False):
         super().__init__()
         self.mod = deepcopy(mod)
+        self.hook_self = hook_self
         hook_point = HookPoint()
         hook_point.name = name
         self.hook_point = hook_point
@@ -95,8 +96,11 @@ class HookedModuleWrapper(HookedRootModule):
             new_submod = HookedModuleWrapper(submod, name='hook_' + key, recursive=True)
             self.mod.__setattr__(key, new_submod)
 
-    def forward(self, *args, **kwrags):
-       result = self.mod.forward(*args, **kwrags)
+    def forward(self, *args, **kwargs):
+       result = self.mod.forward(*args, **kwargs)
+       if not self.hook_self:
+           return result
+       assert isinstance(result, Tensor)
        return self.hook_point(result)
    
 tl_model = HookedModuleWrapper(model, recursive=True)
@@ -123,29 +127,29 @@ def load_annotations(sgf_filename, size=19, start_move=52, end_move=152):
 sgf_filename = os.listdir(SGF_DIR)[2]
 annotated_values = load_annotations(sgf_filename)
 
-
 # %%
 
+# def loss_fn(policy_probs, annotated_values):
+#     pass
+
+# %%
+features = Features(model_config, pos_len)
+
 # copied from play
-def get_outputs(gss:GameState | List[GameState], rules, cache=True):
-    if type(gss) is GameState:
-        gss = [gss]
+def get_policy(gs:GameState, rules, cache=True):
     with torch.no_grad():
         model.eval()
 
-        batch_size = len(gss)
-        bin_input_data = np.zeros(shape=[batch_size]+model.bin_input_shape, dtype=np.float32)
+        bin_input_data = np.zeros(shape=[1]+model.bin_input_shape, dtype=np.float32)
         global_input_data = np.zeros(shape=[1]+model.global_input_shape, dtype=np.float32)
-        pla = [gs.board.pla for gs in gss]
-        opp = [Board.get_opp(p) for p in pla]
-        move_idx = [len(gs.moves) for gs in gss]
+        pla = gs.board.pla
+        opp = Board.get_opp(pla)
+        move_idx = len(gs.moves)
         # This function assumes N(HW)C order but we actually use NCHW order, so work with it and revert
         bin_input_data = np.transpose(bin_input_data,axes=(0,2,3,1))
-        bin_input_data = bin_input_data.reshape([batch_size,1,pos_len*pos_len,-1])
-        featureses = [Features(model.config,pos_len) for i in range(batch_size)]
-        for i, gs in enumerate(gss):
-            featureses[i].fill_row_features(gs.board,pla,opp,gs.boards,gs.moves,move_idx[i],rules,bin_input_data[i],global_input_data,idx=0)
-        bin_input_data = bin_input_data.reshape([batch_size,pos_len,pos_len,-1])
+        bin_input_data = bin_input_data.reshape([1,pos_len*pos_len,-1])
+        features.fill_row_features(gs.board,pla,opp,gs.boards,gs.moves,move_idx,rules,bin_input_data,global_input_data,idx=0)
+        bin_input_data = bin_input_data.reshape([1,pos_len,pos_len,-1])
         bin_input_data = np.transpose(bin_input_data,axes=(0,3,1,2))
 
         # Currently we don't actually do any symmetries
@@ -185,158 +189,35 @@ def get_outputs(gss:GameState | List[GameState], rules, cache=True):
         ) = (x[0] for x in outputs[0]) # N = 0
 
         policy0 = torch.nn.functional.softmax(policy_logits[0,:],dim=0).cpu().numpy()
-        policy1 = torch.nn.functional.softmax(policy_logits[1,:],dim=0).cpu().numpy()
-        value = torch.nn.functional.softmax(value_logits,dim=0).cpu().numpy()
-        td_value = torch.nn.functional.softmax(td_value_logits[0,:],dim=0).cpu().numpy()
-        td_value2 = torch.nn.functional.softmax(td_value_logits[1,:],dim=0).cpu().numpy()
-        td_value3 = torch.nn.functional.softmax(td_value_logits[2,:],dim=0).cpu().numpy()
-        scoremean = pred_scoremean.cpu().item()
-        td_score = pred_td_score.cpu().numpy()
-        scorestdev = pred_scorestdev.cpu().item()
-        lead = pred_lead.cpu().item()
-        vtime = pred_variance_time.cpu().item()
-        estv = math.sqrt(pred_shortterm_value_error.cpu().item())
-        ests = math.sqrt(pred_shortterm_score_error.cpu().item())
-        ownership = torch.tanh(ownership_pretanh).cpu().numpy()
-        scoring = pred_scoring.cpu().numpy()
-        futurepos = torch.tanh(futurepos_pretanh).cpu().numpy()
-        seki_probs = torch.nn.functional.softmax(seki_logits[0:3,:,:],dim=0).cpu().numpy()
-        seki = seki_probs[1] - seki_probs[2]
-        seki2 = torch.sigmoid(seki_logits[3,:,:]).cpu().numpy()
-        scorebelief = torch.nn.functional.softmax(scorebelief_logits,dim=0).cpu().numpy()
-
-    # for gs, features in zip(gss, featureses):
-    #     board = gs.board
-    #     moves_and_probs0 = []
-    #     for i in range(len(policy0)):
-    #         move = features.tensor_pos_to_loc(i,board)
-    #         if i == len(policy0)-1:
-    #             moves_and_probs0.append((Board.PASS_LOC,policy0[i]))
-    #         elif board.would_be_legal(board.pla,move):
-    #             moves_and_probs0.append((move,policy0[i]))
-
-    #     moves_and_probs1 = []
-    #     for i in range(len(policy1)):
-    #         move = features.tensor_pos_to_loc(i,board)
-    #         if i == len(policy1)-1:
-    #             moves_and_probs1.append((Board.PASS_LOC,policy1[i]))
-    #         elif board.would_be_legal(board.pla,move):
-    #             moves_and_probs1.append((move,policy1[i]))
-
-    #     ownership_flat = ownership.reshape([features.pos_len * features.pos_len])
-    #     ownership_by_loc = []
-    #     board = gss.board
-    #     for y in range(board.size):
-    #         for x in range(board.size):
-    #             loc = board.loc(x,y)
-    #             pos = features.loc_to_tensor_pos(loc,board)
-    #             if board.pla == Board.WHITE:
-    #                 ownership_by_loc.append((loc,ownership_flat[pos]))
-    #             else:
-    #                 ownership_by_loc.append((loc,-ownership_flat[pos]))
-
-    #     scoring_flat = scoring.reshape([features.pos_len * features.pos_len])
-    #     scoring_by_loc = []
-    #     board = gss.board
-    #     for y in range(board.size):
-    #         for x in range(board.size):
-    #             loc = board.loc(x,y)
-    #             pos = features.loc_to_tensor_pos(loc,board)
-    #             if board.pla == Board.WHITE:
-    #                 scoring_by_loc.append((loc,scoring_flat[pos]))
-    #             else:
-    #                 scoring_by_loc.append((loc,-scoring_flat[pos]))
-
-    #     futurepos0_flat = futurepos[0,:,:].reshape([features.pos_len * features.pos_len])
-    #     futurepos0_by_loc = []
-    #     board = gss.board
-    #     for y in range(board.size):
-    #         for x in range(board.size):
-    #             loc = board.loc(x,y)
-    #             pos = features.loc_to_tensor_pos(loc,board)
-    #             if board.pla == Board.WHITE:
-    #                 futurepos0_by_loc.append((loc,futurepos0_flat[pos]))
-    #             else:
-    #                 futurepos0_by_loc.append((loc,-futurepos0_flat[pos]))
-
-    #     futurepos1_flat = futurepos[1,:,:].reshape([features.pos_len * features.pos_len])
-    #     futurepos1_by_loc = []
-    #     board = gss.board
-    #     for y in range(board.size):
-    #         for x in range(board.size):
-    #             loc = board.loc(x,y)
-    #             pos = features.loc_to_tensor_pos(loc,board)
-    #             if board.pla == Board.WHITE:
-    #                 futurepos1_by_loc.append((loc,futurepos1_flat[pos]))
-    #             else:
-    #                 futurepos1_by_loc.append((loc,-futurepos1_flat[pos]))
-
-    #     seki_flat = seki.reshape([features.pos_len * features.pos_len])
-    #     seki_by_loc = []
-    #     board = gss.board
-    #     for y in range(board.size):
-    #         for x in range(board.size):
-    #             loc = board.loc(x,y)
-    #             pos = features.loc_to_tensor_pos(loc,board)
-    #             if board.pla == Board.WHITE:
-    #                 seki_by_loc.append((loc,seki_flat[pos]))
-    #             else:
-    #                 seki_by_loc.append((loc,-seki_flat[pos]))
-
-    #     seki_flat2 = seki2.reshape([features.pos_len * features.pos_len])
-    #     seki_by_loc2 = []
-    #     board = gss.board
-    #     for y in range(board.size):
-    #         for x in range(board.size):
-    #             loc = board.loc(x,y)
-    #             pos = features.loc_to_tensor_pos(loc,board)
-    #             seki_by_loc2.append((loc,seki_flat2[pos]))
-
-    #     moves_and_probs = sorted(moves_and_probs0, key=lambda moveandprob: moveandprob[1], reverse=True)
-    #     # Generate a random number biased small and then find the appropriate move to make
-    #     # Interpolate from moving uniformly to choosing from the triangular distribution
-    #     alpha = 1
-    #     beta = 1 + math.sqrt(max(0,len(gss.moves)-20))
-    #     r = np.random.beta(alpha,beta)
-    #     probsum = 0.0
-    #     i = 0
-    #     genmove_result = Board.PASS_LOC
-    #     while True:
-    #         (move,prob) = moves_and_probs[i]
-    #         probsum += prob
-    #         if i >= len(moves_and_probs)-1 or probsum > r:
-    #             genmove_result = move
-    #             break
-    #         i += 1
 
         return {
             "policy0": policy0,
-            "policy1": policy1,
+            # "policy1": policy1,
             # "moves_and_probs0": moves_and_probs0,
             # "moves_and_probs1": moves_and_probs1,
-            "value": value,
-            "td_value": td_value,
-            "td_value2": td_value2,
-            "td_value3": td_value3,
-            "scoremean": scoremean,
-            "td_score": td_score,
-            "scorestdev": scorestdev,
-            "lead": lead,
-            "vtime": vtime,
-            "estv": estv,
-            "ests": ests,
-            "ownership": ownership,
+            # "value": value,
+            # "td_value": td_value,
+            # "td_value2": td_value2,
+            # "td_value3": td_value3,
+            # "scoremean": scoremean,
+            # "td_score": td_score,
+            # "scorestdev": scorestdev,
+            # "lead": lead,
+            # "vtime": vtime,
+            # "estv": estv,
+            # "ests": ests,
+            # "ownership": ownership,
             # "ownership_by_loc": ownership_by_loc,
-            "scoring": scoring,
+            # "scoring": scoring,
             # "scoring_by_loc": scoring_by_loc,
-            "futurepos": futurepos,
+            # "futurepos": futurepos,
             # "futurepos0_by_loc": futurepos0_by_loc,
             # "futurepos1_by_loc": futurepos1_by_loc,
-            "seki": seki,
+            # "seki": seki,
             # "seki_by_loc": seki_by_loc,
-            "seki2": seki2,
+            # "seki2": seki2,
             # "seki_by_loc2": seki_by_loc2,
-            "scorebelief": scorebelief,
+            # "scorebelief": scorebelief,
             # "genmove_result": genmove_result
         }
 
@@ -355,7 +236,7 @@ def get_training_data_from_sgf(sgf_filename):
     # for move in setup:
     #     gs.play(move[0], move[1])
     # print(gs.board.to_string())
-    values = []
+    policies = []
     move_values = []
     for game_move in tqdm(moves[:5]):
         print(f"playing {game_move}")
@@ -364,20 +245,10 @@ def get_training_data_from_sgf(sgf_filename):
         # print(board_str)
 
         outputs = get_outputs(gs, rules)
-        values.append(outputs["value"][0] + outputs["value"][2]/2)
+        policies.append(outputs["policy0"])
 
-        # make all possible moves from this position
-        this_values = dict()
-        for move in range(5): # range(metadata.size ** 2):
-            if gs.board.would_be_legal(gs.board.pla, move):
-                gs_copy = deepcopy(gs)
-                gs_copy.play(gs.board.pla, move)
-                outputs = get_outputs(gs_copy, rules)
-                this_values[move] = outputs["value"][0] + outputs["value"][2]/2
-        move_values.append(this_values)
-
-    print(values)
-    return values, gs
+    print(policies)
+    return policies, gs
 
 
 # get first file in SGF_DIR
