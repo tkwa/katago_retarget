@@ -20,6 +20,7 @@ import transformer_lens as tl
 import json
 import time
 import pstats
+from einops import repeat
 from torch.profiler import profile, record_function, ProfilerActivity
 
 from snp_utils import HookedKataGoWrapper
@@ -85,7 +86,7 @@ class KataPessimizeDataset(Dataset):
 
 dataset = KataPessimizeDataset(DATASET_DIR, n_games=60)
 
-data_loader = DataLoader(dataset, batch_size=64, shuffle=True, num_workers=0)
+data_loader = DataLoader(dataset, batch_size=64, shuffle=False, num_workers=0)
 
 # %%
 wrapped_model = HookedKataGoWrapper(kata_model).to(DEVICE)
@@ -96,8 +97,20 @@ wrapped_model = HookedKataGoWrapper(kata_model).to(DEVICE)
 features = Features(model_config, pos_len)
 board = Board(19)
 
+loc_to_move_map = torch.zeros(362, dtype=torch.int64)
+for i in range(board.arrsize):
+    entry = features.loc_to_tensor_pos(i, board)
+    print(entry)
+    if 0 <= entry < 362:
+        loc_to_move_map[entry] = i
+
+# %%
+
 # copied from play
-def get_policy(model:HookedKataGoWrapper, bin_input_data, global_input_data):
+def get_policy(model:HookedKataGoWrapper, bin_input_data, global_input_data, annotated_values=None):
+    """
+    We use annotated_values to ...
+    """
     # print(f"bin_input_data.shape {bin_input_data.shape}")
     # print(f"global_input_data.shape {global_input_data.shape}")
     model.eval()
@@ -109,8 +122,8 @@ def get_policy(model:HookedKataGoWrapper, bin_input_data, global_input_data):
 
     with model.hooks() as hooked_model:
         model_outputs = hooked_model.mod(
-            torch.tensor(bin_input_data, dtype=torch.float32).to(DEVICE),
-            torch.tensor(global_input_data, dtype=torch.float32).to(DEVICE),
+            bin_input_data.to(DEVICE),
+            global_input_data.to(DEVICE),
         )
 
     outputs = model.mod.postprocess_output(model_outputs)
@@ -132,7 +145,12 @@ def get_policy(model:HookedKataGoWrapper, bin_input_data, global_input_data):
         scorebelief_logits, # N, 2 * (self.pos_len*self.pos_len + EXTRA_SCORE_DISTR_RADIUS)
     ) = (x for x in outputs[0]) # batch
 
-    policy0 = torch.nn.functional.softmax(policy_logits[:, 0, :],dim=1) # batch, move
+    nan_mask = torch.isnan(annotated_values)
+    reshaped_nan_mask = torch.gather(nan_mask, 1, repeat(loc_to_move_map, 'loc -> batch loc', batch=batch_size))
+    policy0_logits = policy_logits[:, 0, :] # batch, loc
+    policy0_logits[reshaped_nan_mask] = -torch.inf # Prevent policy from making illegal moves
+
+    policy0 = torch.nn.functional.softmax(policy0_logits,dim=1) # batch, loc
     # policy_inverted = torch.nn.functional.softmax(- policy_logits[0,:], dim=0)
     value = torch.nn.functional.softmax(value_logits,dim=0).detach().cpu().numpy()
 
@@ -157,6 +175,10 @@ def get_policy(model:HookedKataGoWrapper, bin_input_data, global_input_data):
     #         # probs_inverted[Board.PASS_LOC] = policy_inverted[i]
     #     else: # elif board.would_be_legal(board.pla,move):
     #         probs_inverted[move] = policy_inverted[i]
+
+    nan_probs = torch.isnan(probs0).sum()
+    if nan_probs > 0:
+        print(f"Warning: probs0 has {nan_probs} nan values")
 
     return {
         "policy0": policy0,
@@ -191,6 +213,19 @@ def get_policy(model:HookedKataGoWrapper, bin_input_data, global_input_data):
         # "scorebelief": scorebelief,
         # "genmove_result": genmove_result
     }
+# %%
+
+def print_board_template(arr, size=19):
+    board = Board(size)
+    board.board = arr
+    # result = np.zeros((size+2, size+1), dtype=int)
+    # for y in range(size + 2):
+    #     for x in range(size + 1):
+    #         board[y, x] = arr[board.loc(x-1, y-1)]
+    print(board.to_string())
+    print()
+
+# print_board_template(19)
 
 # %%
 def loss_fn(policy_probs:Tensor, annotated_values:Tensor, pla:int):
@@ -206,15 +241,28 @@ def loss_fn(policy_probs:Tensor, annotated_values:Tensor, pla:int):
         raise Exception(f"policy_probs.shape {policy_probs.shape} != annotated_values.shape {annotated_values.shape}")
     bad_pla_mask = ~((pla == 1) | (pla == 2))
     if bad_pla_mask.any():
-        print(f"Warning: pla has values other than 1 or 2 at {bad_pla_mask.nonzero().tolist()}")
+        raise ValueError(f"pla has values other than 1 or 2 at {bad_pla_mask.nonzero().tolist()}")
         annotated_values[bad_pla_mask] = 0
     
     annotated_values[pla == 2] = 1 - annotated_values[pla == 2]
     # Policy should be 0 wherever annotated value is nan
     nan_mask = torch.isnan(annotated_values)
-    # if policy_probs[nan_mask].nonzero().shape[0] != 0:
-    #     bad_list = policy_probs[nan_mask].nonzero()
-    #     print(f"Warning: policy_probs has non-zero values where annotated_values is nan, at {bad_list.numel()} locations {bad_list.tolist()}")
+    # print(f"nan values: {nan_mask.sum(dim=-1)}")
+    # for i in range(nan_mask.shape[0]):
+    #     total_nonnan_prob = policy_probs[i][~nan_mask[i]].sum()
+    #     if total_nonnan_prob < 0.5:
+    #         print(f"Warning: total_nonnan_prob={total_nonnan_prob} at {i}")
+    #         print(f"nans")
+    #         print_board_template(nan_mask[i])
+    #         # print(f"{policy_probs[i]=}")
+    #         policy_mask = (policy_probs[i] > 1e-3)
+    #         print(f"policy > 1e-3:")
+    #         print_board_template(policy_mask)
+    #         print(f"policy & nans:")
+    #         print_board_template(policy_mask & nan_mask[i])
+        # if policy_probs[i][nan_mask].nonzero().shape[0] != 0:
+        #     bad_list = policy_probs[i][nan_mask].nonzero()
+        #     print(f"Warning: policy_probs has non-zero values where annotated_values is nan, at {bad_list.numel()} locations {bad_list.tolist()}")
 
     annotated_values = torch.nan_to_num(annotated_values, nan=torch.inf)
     annotated_values = annotated_values - annotated_values.min() # regrets
@@ -225,17 +273,6 @@ def loss_fn(policy_probs:Tensor, annotated_values:Tensor, pla:int):
     policy_probs *= 1 / policy_probs.sum(dim=-1, keepdim=True)
     return (policy_probs * annotated_values).sum(dim=-1)
 
-# %%
-
-def print_board_template(size=19):
-    board = Board(size)
-    result = np.zeros((size+2, size+1), dtype=int)
-    for y in range(size + 2):
-        for x in range(size + 1):
-            result[y, x] = board.loc(x-1, y-1)
-    print(result)
-
-# print_board_template(19)
 
 
 # %%
@@ -245,14 +282,14 @@ def print_board_template(size=19):
 def train(wrapped_model, data_loader:DataLoader, n_epochs=1):
     # n_epochs=1
     regrets = []
-    optimizer = torch.optim.Adam(wrapped_model.parameters(), lr=0.001)
+    optimizer = torch.optim.Adam(wrapped_model.parameters(), lr=0.001) # TODO change lr
     with wrapped_model.with_fwd_hooks() as hooked_model:
         for epoch in range(n_epochs):
             for batch in tqdm(data_loader):
                 optimizer.zero_grad()
                 bin_input_data, global_input_data, pla = batch["bin_input_data"], batch["global_input_data"], batch["pla"]
-                policy = get_policy(hooked_model, bin_input_data, global_input_data)
-                losses = loss_fn(policy["probs0"], batch["annotated_values"], pla)
+                policy_data = get_policy(hooked_model, bin_input_data, global_input_data, batch["annotated_values"])
+                losses = loss_fn(policy_data["probs0"], batch["annotated_values"], pla)
                 avg_loss = losses.mean()
                 avg_loss.backward()
                 optimizer.step()
@@ -263,8 +300,6 @@ def train(wrapped_model, data_loader:DataLoader, n_epochs=1):
 
 train(wrapped_model, data_loader)
 # cProfile.run("train(wrapped_model, data_loader)", "output.pstats")
-
-
 
 # %%
 
@@ -284,8 +319,8 @@ p = pstats.Stats('output.pstats')
 p.sort_stats('cumulative').print_stats(20)
 # %%
 
-with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
-    train(wrapped_model, data_loader)
+# with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
+#     train(wrapped_model, data_loader)
 
 
 # %%
