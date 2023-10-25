@@ -103,9 +103,9 @@ class HookedKataGoWrapper(HookedModuleWrapper):
         p = (self.mask_init_p - self.gamma) / (self.zeta - self.gamma)
         mask_init_constant = math.log(p / (1 - p))
         for i, block in enumerate(self.mod.blocks):
-            mask_name = f"blocks.{i}.mod.normactconvq.mod.act.hook_point"
+            mask_name = f"mod.blocks.{i}.mod.normactconvq.mod.act.hook_point"
             mask_dim = block.mod.normactconvq.mod.conv.mod.in_channels
-            self.mask_logits.append(torch.nn.Parameter(torch.zeros(mask_dim, dtype=torch.float32) + mask_init_constant))
+            self.mask_logits.append(torch.nn.Parameter(torch.zeros((mask_dim,1,1), dtype=torch.float32) + mask_init_constant))
             self.mask_logits_names.append(mask_name)
             self._mask_logits_dict[mask_name] = self.mask_logits[-1]
 
@@ -131,7 +131,8 @@ class HookedKataGoWrapper(HookedModuleWrapper):
     
     def activation_mask_hook(self, hook_point_out: torch.Tensor, hook: HookPoint):
         mask = self.sample_mask(hook.name)
-        out = mask * hook_point_out + (1 - mask) * self.cache[hook.name]
+        # print(f"trying to multiply mask {mask.shape} with hook_point_out {hook_point_out.shape}")
+        out = (2 * mask - 1) * hook_point_out
         return out
 
     def fwd_hooks(self) -> List[Tuple[str, Callable]]:
