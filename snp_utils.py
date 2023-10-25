@@ -39,7 +39,7 @@ class HookedModuleWrapper(HookedRootModule):
     """
     def __init__(self, mod:torch.nn.Module, name='model', recursive=False, hook_self=True, top_level=True):
         super().__init__()
-        self.mod = deepcopy(mod)
+        self.mod = mod # deepcopy(mod)
         self.hook_self = hook_self
         if hook_self:
             hook_point = HookPoint()
@@ -132,7 +132,7 @@ class HookedKataGoWrapper(HookedModuleWrapper):
     def activation_mask_hook(self, hook_point_out: torch.Tensor, hook: HookPoint):
         mask = self.sample_mask(hook.name)
         # print(f"trying to multiply mask {mask.shape} with hook_point_out {hook_point_out.shape}")
-        out = (2 * mask - 1) * hook_point_out
+        out = (1 - 2 * mask) * hook_point_out # 0 -> keep, 1 -> invert
         return out
 
     def fwd_hooks(self) -> List[Tuple[str, Callable]]:
