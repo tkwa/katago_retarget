@@ -116,7 +116,7 @@ class HookedKataGoWrapper(HookedModuleWrapper):
         s = torch.sigmoid((uniform_sample.log() - (1 - uniform_sample).log() + mask_scores) / self.beta)
         s_bar = s * (self.zeta - self.gamma) + self.gamma
         mask = s_bar.clamp(min=0.0, max=1.0)
-        return mask
+        return 1 - 2 * mask  # 0 -> keep, 1 -> invert
     
     def regularization_loss(self) -> torch.Tensor:
         center = self.beta * math.log(-self.gamma / self.zeta)
@@ -132,7 +132,7 @@ class HookedKataGoWrapper(HookedModuleWrapper):
     def activation_mask_hook(self, hook_point_out: torch.Tensor, hook: HookPoint):
         mask = self.sample_mask(hook.name)
         # print(f"trying to multiply mask {mask.shape} with hook_point_out {hook_point_out.shape}")
-        out = (1 - 2 * mask) * hook_point_out # 0 -> keep, 1 -> invert
+        out = mask * hook_point_out
         return out
 
     def fwd_hooks(self) -> List[Tuple[str, Callable]]:
