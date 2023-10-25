@@ -85,8 +85,10 @@ class KataPessimizeDataset(Dataset):
     
 
 dataset = KataPessimizeDataset(DATASET_DIR, n_games=60)
-
-data_loader = DataLoader(dataset, batch_size=64, shuffle=False, num_workers=0)
+test_frac = 0.1
+train_set, test_set = torch.utils.data.random_split(dataset, [int(len(dataset)*(1-test_frac)), int(len(dataset)*test_frac)])
+train_loader = DataLoader(train_set, batch_size=64, shuffle=True, num_workers=0)
+test_loader = DataLoader(test_set, batch_size=64, shuffle=True, num_workers=0)
 
 # %%
 wrapped_model = HookedKataGoWrapper(kata_model).to(DEVICE)
@@ -100,7 +102,6 @@ board = Board(19)
 loc_to_move_map = torch.zeros(362, dtype=torch.int64)
 for i in range(board.arrsize):
     entry = features.loc_to_tensor_pos(i, board)
-    print(entry)
     if 0 <= entry < 362:
         loc_to_move_map[entry] = i
 
@@ -121,7 +122,7 @@ def get_policy(model:HookedKataGoWrapper, bin_input_data, global_input_data, ann
     # model_outputs = model(apply_symmetry(batch["binaryInputNCHW"],symmetry),batch["globalInputNC"])
 
     with model.hooks() as hooked_model:
-        model_outputs = hooked_model.mod(
+        model_outputs = hooked_model(
             bin_input_data.to(DEVICE),
             global_input_data.to(DEVICE),
         )
@@ -279,31 +280,46 @@ def loss_fn(policy_probs:Tensor, annotated_values:Tensor, pla:int):
 
 
 
-def train(wrapped_model, data_loader:DataLoader, n_epochs=1):
+def train(wrapped_model:HookedKataGoWrapper, data_loader:DataLoader, n_epochs=1):
     # n_epochs=1
-    regrets = []
     optimizer = torch.optim.Adam(wrapped_model.parameters(), lr=0.001) # TODO change lr
     with wrapped_model.with_fwd_hooks() as hooked_model:
         for epoch in range(n_epochs):
+            regrets = []
+            print(f"Starting epoch {epoch}/{n_epochs}")
             for batch in tqdm(data_loader):
                 optimizer.zero_grad()
                 bin_input_data, global_input_data, pla = batch["bin_input_data"], batch["global_input_data"], batch["pla"]
                 policy_data = get_policy(hooked_model, bin_input_data, global_input_data, batch["annotated_values"])
                 losses = loss_fn(policy_data["probs0"], batch["annotated_values"], pla)
-                avg_loss = losses.mean()
+                avg_loss = losses.mean() + wrapped_model.regularization_loss()
                 avg_loss.backward()
                 optimizer.step()
                 regrets.append(avg_loss.item())
-        print(f"Average loss: {np.mean(regrets)}")
+            print(f"Average loss: {np.mean(regrets)}")
 
 
 
-train(wrapped_model, data_loader)
+
+# %%
+
+def visualize_mask(wrapped_model:HookedKataGoWrapper):
+    # Make histograms of mask values
+    fig, axs = plt.subplots(4, 5)
+    for i, ax in enumerate(axs.flat[:len(wrapped_model.mask_logits)]):
+        mask = wrapped_model.sample_mask(wrapped_model.mask_logits_names[i]).detach().cpu().numpy().flatten()
+        ax.hist(mask, bins=20)
+        ax.set_title(f"Layer {i}")
+    plt.show()
+
+visualize_mask(wrapped_model)
+# %%
+train(wrapped_model, train_loader, n_epochs=2)
 # cProfile.run("train(wrapped_model, data_loader)", "output.pstats")
 
 # %%
 
-
+visualize_mask(wrapped_model)
 # sns.scatterplot(y=[r.item() for r in regrets], x=np.arange(52, 152), color='blue')
 # sns.scatterplot(y=[r.item() for r in regrets_inverted], x=np.arange(52, 152), color='red')
 # # label this series "regrets":
