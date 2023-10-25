@@ -147,10 +147,18 @@ def process_file(sgf_filename, start_move=52, end_move=152):
             bin_input_data[move_n - start_move], global_input_data[move_n - start_move] = get_input_data(gs, rules)
             pla[move_n - start_move] = gs.board.pla
 
+    nonzero_mask = pla != 0
+    bin_input_data = bin_input_data[nonzero_mask]
+    global_input_data = global_input_data[nonzero_mask]
+    annotated_values = annotated_values[nonzero_mask]
+    pla = pla[nonzero_mask]
+
     # print(policies)
     np.savez(os.path.join(DATASET_DIR, sgf_filename + '.npz'), bin_input_data=bin_input_data, global_input_data=global_input_data, annotated_values=annotated_values, pla=pla)
 
 def make_dataset(overwrite=False):
+    if overwrite:
+        print("Overwriting dataset")
     for annotation_filename in tqdm(os.listdir(ANNOTATIONS_DIR)[:N_GAMES_IN_DATASET]):
         sgf_filename = annotation_filename[:-7]
         dataset_filename = sgf_filename + '.npz'
