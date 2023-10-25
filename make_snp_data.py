@@ -38,7 +38,7 @@ ANNOTATIONS_DIR = 'annotations'
 DATASET_DIR = 'dataset'
 CHECKPOINT_FILE = 'kg_checkpoint/kata1-b18c384nbt-s7709731328-d3715293823/model.ckpt'
 DEVICE = 'cuda'
-N_GAMES_IN_DATASET = 100
+N_GAMES_IN_DATASET = 1000
 pos_len = 19
 
 # We load the model just to get bin_input_shape and global_input_shape
@@ -117,10 +117,10 @@ def get_input_data(gs:GameState, rules, cache=True):
 
 # Projected size: 4*22*19*19*100*1000
 
-def make_dataset(sgf_filename, start_move=52, end_move=152):
+def process_file(sgf_filename, start_move=52, end_move=152):
     # TODO fix komi and rules when loading?
     metadata, setup, moves, rules = load_sgf_moves_exn(os.path.join(SGF_DIR, sgf_filename))
-    print(f"Loaded {sgf_filename}")
+    # print(f"Loaded {sgf_filename}")
     # print(f"Metadata: {metadata}")
     # print(f"Rules: {rules}")
     # print(f"Setup: {setup}")
@@ -136,22 +136,34 @@ def make_dataset(sgf_filename, start_move=52, end_move=152):
     
     bin_input_data = np.zeros(shape=[end_move - start_move]+model.bin_input_shape, dtype=np.float32)
     global_input_data = np.zeros(shape=[end_move - start_move]+model.global_input_shape, dtype=np.float32)
+    pla = np.zeros(shape=[end_move - start_move], dtype=np.float32)
 
-    for move_n, game_move in tqdm(enumerate(moves[:end_move])):
+    for move_n, game_move in enumerate(moves[:end_move]):
         # print(f"playing {game_move}")
         gs.play(game_move[0], game_move[1])
         board_str = '\n' + gs.board.to_string().strip()
         # print(board_str)
         if move_n >= start_move:
             bin_input_data[move_n - start_move], global_input_data[move_n - start_move] = get_input_data(gs, rules)
+            pla[move_n - start_move] = gs.board.pla
 
     # print(policies)
-    np.savez(os.path.join(DATASET_DIR, sgf_filename + '.npz'), bin_input_data=bin_input_data, global_input_data=global_input_data, annotated_values=annotated_values)
+    np.savez(os.path.join(DATASET_DIR, sgf_filename + '.npz'), bin_input_data=bin_input_data, global_input_data=global_input_data, annotated_values=annotated_values, pla=pla)
 
-if __name__ == '__main__':
-    for annotation_filename in os.listdir(ANNOTATIONS_DIR)[:N_GAMES_IN_DATASET]:
+def make_dataset(overwrite=False):
+    for annotation_filename in tqdm(os.listdir(ANNOTATIONS_DIR)[:N_GAMES_IN_DATASET]):
         sgf_filename = annotation_filename[:-7]
-        make_dataset(sgf_filename)
+        dataset_filename = sgf_filename + '.npz'
+        dataset_relpath = os.path.join(DATASET_DIR, dataset_filename)
+        if os.path.exists(dataset_relpath) and not overwrite:
+            print(f"Skipping {sgf_filename}")
+            continue
+        process_file(sgf_filename)
+# %%
+
+if __name__ == "__main__":
+    args = sys.argv[1:]
+    make_dataset(overwrite='-overwrite' in args)
 
 
 # %%
