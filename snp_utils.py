@@ -87,9 +87,9 @@ class HookedKataGoWrapper(HookedModuleWrapper):
 
     def __init__(self, model:KataModel, beta=2 / 3, gamma=-0.1, zeta=1.1, mask_init_p=0.9):
         super().__init__(model, name='model', recursive=True, hook_self=False, top_level=True)
-        self.setup_masks()
+        self.setup_masks(beta, gamma, zeta, mask_init_p)
 
-    def setup_masks(self, beta=2 / 3, gamma=-0.1, zeta=1.1, mask_init_p=0.9):
+    def setup_masks(self, beta, gamma, zeta, mask_init_p):
         self.mask_logits = torch.nn.ParameterList()
         self.mask_logits_names = []
         self._mask_logits_dict = {}
@@ -142,6 +142,6 @@ class HookedKataGoWrapper(HookedModuleWrapper):
         return self.hooks(self.fwd_hooks())
 
     def freeze_weights(self):
-        for p in self.model.parameters():
+        for p in self.mod.parameters():
             p.requires_grad = False
 # %%
