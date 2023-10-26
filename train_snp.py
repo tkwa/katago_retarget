@@ -22,6 +22,7 @@ import time
 import pstats
 from einops import repeat
 from torch.profiler import profile, record_function, ProfilerActivity
+import wandb
 
 from snp_utils import HookedKataGoWrapper
 sys.path.append("/home/ubuntu/katago_pessimize/KataGo/python")
@@ -61,7 +62,6 @@ class KataPessimizeDataset(Dataset):
         for filename in os.listdir(data_dir)[:n_games]:
             if filename.endswith(".npz"):
                 with np.load(os.path.join(data_dir, filename)) as data:
-                    print(data)
                     self.games.append({
                         "bin_input_data": data['bin_input_data'],
                         "global_input_data": data['global_input_data'],
@@ -84,14 +84,13 @@ class KataPessimizeDataset(Dataset):
         }
     
 
-dataset = KataPessimizeDataset(DATASET_DIR, n_games=60)
+dataset = KataPessimizeDataset(DATASET_DIR, n_games=800)
 test_frac = 0.1
 train_set, test_set = torch.utils.data.random_split(dataset, [int(len(dataset)*(1-test_frac)), int(len(dataset)*test_frac)])
-train_loader = DataLoader(train_set, batch_size=64, shuffle=True, num_workers=0)
-test_loader = DataLoader(test_set, batch_size=64, shuffle=True, num_workers=0)
 
 # %%
 wrapped_model = HookedKataGoWrapper(kata_model).to(DEVICE)
+wrapped_model.freeze_weights()
 
 # %%
 
@@ -272,7 +271,8 @@ def loss_fn(policy_probs:Tensor, annotated_values:Tensor, pla:int):
     if (policy_probs.sum(dim=-1) - 1).abs().max() > 1e-3:
         print(f"Warning: sum(probs) != 1; range={policy_probs.sum(dim=-1).min(), policy_probs.sum(dim=-1).max()}")
     policy_probs *= 1 / policy_probs.sum(dim=-1, keepdim=True)
-    return (policy_probs * annotated_values).sum(dim=-1)
+    result = (policy_probs * annotated_values).sum(dim=-1)
+    return result
 
 
 
@@ -280,25 +280,41 @@ def loss_fn(policy_probs:Tensor, annotated_values:Tensor, pla:int):
 
 
 
-def train(wrapped_model:HookedKataGoWrapper, data_loader:DataLoader, n_epochs=1):
-    # n_epochs=1
-    optimizer = torch.optim.Adam(wrapped_model.parameters(), lr=0.001) # TODO change lr
+def train(wrapped_model:HookedKataGoWrapper, data_loader:DataLoader, n_epochs=1, regularization_lambda=1, use_wandb=True):
+    if use_wandb:
+        wandb.init(project="kata-pessimize")
+        wandb.watch(wrapped_model)
+    optimizer = torch.optim.Adam(wrapped_model.parameters(), lr=0.002) # TODO change lr
     with wrapped_model.with_fwd_hooks() as hooked_model:
         for epoch in range(n_epochs):
             regrets = []
+            regularization_losses = []
             print(f"Starting epoch {epoch}/{n_epochs}")
             for batch in tqdm(data_loader):
                 optimizer.zero_grad()
                 bin_input_data, global_input_data, pla = batch["bin_input_data"], batch["global_input_data"], batch["pla"]
                 policy_data = get_policy(hooked_model, bin_input_data, global_input_data, batch["annotated_values"])
                 losses = loss_fn(policy_data["probs0"], batch["annotated_values"], pla)
-                avg_loss = losses.mean() + wrapped_model.regularization_loss()
-                avg_loss.backward()
+                regularization_loss = hooked_model.regularization_loss()
+                avg_loss = losses.mean()
+                if epoch==0: print(avg_loss.item())
+                total_loss = regularization_lambda * regularization_loss + avg_loss
+                total_loss.backward()
                 optimizer.step()
                 regrets.append(avg_loss.item())
+                regularization_losses.append(regularization_loss.item())
             print(f"Average loss: {np.mean(regrets)}")
+            print(f"Average regularization loss: {np.mean(regularization_losses)}")
+            mean_mask_value = torch.tensor([wrapped_model.sample_mask(n).mean() for n in wrapped_model.mask_logits_names]).mean()
+            if use_wandb:
+                wandb.log({"regret": np.mean(regrets), "regularization_loss": np.mean(regularization_losses),
+                           "mean_mask_value": mean_mask_value})
+            if epoch % 2 == 0:
+                time_str = time.strftime("%Y%m%d-%H%M%S")
+                torch.save(wrapped_model.state_dict(), f"models/model_{epoch}_{time_str}.pth")
 
-
+    if use_wandb:
+        wandb.finish()
 
 
 # %%
@@ -311,15 +327,17 @@ def visualize_mask(wrapped_model:HookedKataGoWrapper):
         ax.hist(mask, bins=20)
         ax.set_title(f"Layer {i}")
     plt.show()
+    print(f"Mean mask value: {torch.tensor([wrapped_model.sample_mask(n).mean() for n in wrapped_model.mask_logits_names]).mean()}")
 
 visualize_mask(wrapped_model)
 # %%
-train(wrapped_model, train_loader, n_epochs=2)
+train_loader = DataLoader(train_set, batch_size=128, shuffle=True, num_workers=0)
+# %%
+# test_loader = DataLoader(test_set, batch_size=256, shuffle=True, num_workers=0)
+train(wrapped_model, train_loader, n_epochs=20, regularization_lambda=1e3, use_wandb=True)
 # cProfile.run("train(wrapped_model, data_loader)", "output.pstats")
 
 # %%
-
-visualize_mask(wrapped_model)
 # sns.scatterplot(y=[r.item() for r in regrets], x=np.arange(52, 152), color='blue')
 # sns.scatterplot(y=[r.item() for r in regrets_inverted], x=np.arange(52, 152), color='red')
 # # label this series "regrets":
@@ -329,20 +347,11 @@ visualize_mask(wrapped_model)
 # plt.show()
 # %%
 # Create a pstats object
-p = pstats.Stats('output.pstats')
+# p = pstats.Stats('output.pstats')
 
-# Sort the statistics by the cumulative time and print the first few lines
-p.sort_stats('cumulative').print_stats(20)
+# # Sort the statistics by the cumulative time and print the first few lines
+# p.sort_stats('cumulative').print_stats(20)
 # %%
 
 # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
 #     train(wrapped_model, data_loader)
-
-
-# %%
-print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
-# %%
-output = prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=10)
-print(output)
-prof.export_chrome_trace("trace.json")
-# %%

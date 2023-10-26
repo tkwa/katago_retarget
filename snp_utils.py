@@ -4,7 +4,7 @@ import sys
 import math
 import torch
 from torch import Tensor
-from typing import List, Dict, Tuple, Callable, ContextManager
+from typing import List, Dict, Tuple, Callable, ContextManager, Self
 from transformer_lens.hook_points import HookPoint, HookedRootModule
 
 sys.path.append("/home/ubuntu/katago_pessimize/KataGo/python")
@@ -138,7 +138,7 @@ class HookedKataGoWrapper(HookedModuleWrapper):
     def fwd_hooks(self) -> List[Tuple[str, Callable]]:
         return [(n, self.activation_mask_hook) for n in self.mask_logits_names]
 
-    def with_fwd_hooks(self) -> ContextManager[HookedRootModule]:
+    def with_fwd_hooks(self) -> ContextManager[Self]:
         return self.hooks(self.fwd_hooks())
 
     def freeze_weights(self):
