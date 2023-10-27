@@ -280,15 +280,16 @@ def loss_fn(policy_probs:Tensor, annotated_values:Tensor, pla:int):
 
 
 
-def train(wrapped_model:HookedKataGoWrapper, data_loader:DataLoader, n_epochs=1, regularization_lambda=1, use_wandb=True):
+def train(wrapped_model:HookedKataGoWrapper, data_loader:DataLoader, n_epochs=1, regularization_lambda=1, lr=0.005, use_wandb=True):
     if use_wandb:
         wandb.init(project="kata-pessimize")
         wandb.watch(wrapped_model)
-    optimizer = torch.optim.Adam(wrapped_model.parameters(), lr=0.002) # TODO change lr
+    optimizer = torch.optim.Adam(wrapped_model.parameters(), lr=lr) # TODO change lr
     with wrapped_model.with_fwd_hooks() as hooked_model:
         for epoch in range(n_epochs):
             regrets = []
             regularization_losses = []
+            total_losses = []
             print(f"Starting epoch {epoch}/{n_epochs}")
             for batch in tqdm(data_loader):
                 optimizer.zero_grad()
@@ -303,13 +304,14 @@ def train(wrapped_model:HookedKataGoWrapper, data_loader:DataLoader, n_epochs=1,
                 optimizer.step()
                 regrets.append(avg_loss.item())
                 regularization_losses.append(regularization_loss.item())
+                total_losses.append(total_loss.item())
             print(f"Average loss: {np.mean(regrets)}")
             print(f"Average regularization loss: {np.mean(regularization_losses)}")
             mean_mask_value = torch.tensor([wrapped_model.sample_mask(n).mean() for n in wrapped_model.mask_logits_names]).mean()
             if use_wandb:
                 wandb.log({"regret": np.mean(regrets), "regularization_loss": np.mean(regularization_losses),
-                           "mean_mask_value": mean_mask_value})
-            if epoch % 2 == 0:
+                    "total_loss": np.mean(total_losses), "mean_mask_value": mean_mask_value})
+            if (epoch + 1) % 5 == 0:
                 time_str = time.strftime("%Y%m%d-%H%M%S")
                 torch.save(wrapped_model.state_dict(), f"models/model_{epoch}_{time_str}.pth")
 
@@ -334,7 +336,7 @@ visualize_mask(wrapped_model)
 train_loader = DataLoader(train_set, batch_size=128, shuffle=True, num_workers=0)
 # %%
 # test_loader = DataLoader(test_set, batch_size=256, shuffle=True, num_workers=0)
-train(wrapped_model, train_loader, n_epochs=20, regularization_lambda=1e3, use_wandb=True)
+train(wrapped_model, train_loader, n_epochs=20, regularization_lambda=0.1, use_wandb=True)
 # cProfile.run("train(wrapped_model, data_loader)", "output.pstats")
 
 # %%
