@@ -1,6 +1,7 @@
 # %%
 from snp_utils import HookedKataGoWrapper
 from KataGo.python.load_model import load_model
+import numpy as np
 import torch
 import matplotlib.pyplot as plt
 from KataGo.python.model_pytorch import Model
@@ -26,13 +27,51 @@ wrapped_model.load_state_dict(state_dict)
 
 # %%
 
+def mask_flippedness(wrapped_model:HookedKataGoWrapper) -> np.ndarray:
+    """
+    Gives a complexity score to the mask, adjusting the
+    number of things flipped for total number of mask items...
+    """
+    sums = np.zeros(len(wrapped_model.mask_logits))
+    for i, mask_logits in enumerate(wrapped_model.mask_logits):
+        mask = wrapped_model.sample_mask(wrapped_model.mask_logits_names[i]).detach().cpu().numpy().flatten()
+        sums[i] = np.sum(1 - mask)
+    return sums
+
+mask_flippedness(wrapped_model)
+
+# %%
+
+def graph_mask_complexity(wrapped_model:HookedKataGoWrapper):
+    # Make a bar graph of mask complexity
+    sums = mask_flippedness(wrapped_model)
+    plt.bar(np.arange(len(sums)), sums)
+    short_names = ['.'.join(n.split('.')[1:3]) for n in wrapped_model.mask_logits_names]
+    plt.xticks(np.arange(len(sums)), short_names, rotation=90)
+    plt.title("Total parameters flipped by mask")
+
+graph_mask_complexity(wrapped_model)
+
+# %%
+
 def visualize_mask(wrapped_model:HookedKataGoWrapper):
     # Make histograms of mask values
     fig, axs = plt.subplots(4, 5)
+    masks = []
+    ax: plt.Axes
     for i, ax in enumerate(axs.flat[:len(wrapped_model.mask_logits)]):
         mask = wrapped_model.sample_mask(wrapped_model.mask_logits_names[i]).detach().cpu().numpy().flatten()
+        masks.append(mask)
         ax.hist(mask, bins=20)
-        ax.set_title(f"Layer {i}")
+        # remove y ticks
+        ax.set_yticks([])
+        ax.set_title(f"Layer {i}", y=0.5)
+        # make title inside plot and transparent
+    plt.suptitle("Mask values by layer")
+    plt.show()
+    # Now make one big histogram
+    plt.hist(np.concatenate(masks), bins=40)
+    plt.title("Mask values, all layers")
     plt.show()
     print(f"Mean mask value: {torch.tensor([wrapped_model.sample_mask(n).mean() for n in wrapped_model.mask_logits_names]).mean()}")
 
