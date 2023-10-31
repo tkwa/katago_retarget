@@ -35,7 +35,7 @@ def mask_flippedness(wrapped_model:HookedKataGoWrapper) -> np.ndarray:
     sums = np.zeros(len(wrapped_model.mask_logits))
     for i, mask_logits in enumerate(wrapped_model.mask_logits):
         mask = wrapped_model.sample_mask(wrapped_model.mask_logits_names[i]).detach().cpu().numpy().flatten()
-        sums[i] = np.sum(1 - mask)
+        sums[i] = np.sum((1 - mask) / 2)
     return sums
 
 mask_flippedness(wrapped_model)
@@ -48,7 +48,7 @@ def graph_mask_complexity(wrapped_model:HookedKataGoWrapper):
     plt.bar(np.arange(len(sums)), sums)
     short_names = ['.'.join(n.split('.')[1:3]) for n in wrapped_model.mask_logits_names]
     plt.xticks(np.arange(len(sums)), short_names, rotation=90)
-    plt.title("Total parameters flipped by mask")
+    plt.title("Total parameters flipped by mask layer")
 
 graph_mask_complexity(wrapped_model)
 
@@ -56,7 +56,7 @@ graph_mask_complexity(wrapped_model)
 
 def visualize_mask(wrapped_model:HookedKataGoWrapper):
     # Make histograms of mask values
-    fig, axs = plt.subplots(4, 5)
+    fig, axs = plt.subplots(6, 3)
     masks = []
     ax: plt.Axes
     for i, ax in enumerate(axs.flat[:len(wrapped_model.mask_logits)]):
