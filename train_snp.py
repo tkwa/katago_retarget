@@ -1,10 +1,4 @@
 # %%
-"""
-Converts the SGF files into a training set that can be passed to the model,
-which has a position and the value for each possible move.
-Then applies subnetwork probing (TODO)
-"""
-
 import os
 import sys
 import numpy as np
@@ -23,6 +17,7 @@ import pstats
 from einops import repeat
 from torch.profiler import profile, record_function, ProfilerActivity
 import wandb
+import argparse
 
 from snp_utils import HookedKataGoWrapper
 sys.path.append("/home/ubuntu/katago_pessimize/KataGo/python")
@@ -38,14 +33,31 @@ from tqdm import tqdm
 
 # %%
 
-SGF_DIR = 'sgf_downloads'
 DATASET_DIR = 'dataset'
-ANNOTATIONS_DIR = 'annotations'
 CHECKPOINT_FILE = 'kg_checkpoint/kata1-b18c384nbt-s7709731328-d3715293823/model.ckpt'
 DEVICE = 'cuda'
 pos_len = 19
 
-kata_model, swa_model, _ = load_model(CHECKPOINT_FILE, None, device=DEVICE, pos_len=pos_len, verbose=True)
+argparser = argparse.ArgumentParser(
+    description="Use modified subnetwork probing to train the KataGo policy net to make the worst move")
+
+for k, v in {
+    "--dataset_dir": DATASET_DIR,
+    "--checkpoint_file": CHECKPOINT_FILE,
+    "--device": DEVICE,
+    "--wandb": True,
+    "--n_epochs": 100,
+    "--lr": 0.01,
+    "--regularization_lambda": 1,
+}.items():
+    argparser.add_argument(k, default=v)
+
+args, unknown = argparser.parse_known_args()
+print(f"args: {args}")
+
+# %%
+
+kata_model, swa_model, _ = load_model(args.checkpoint_file, None, device=args.device, pos_len=pos_len, verbose=True)
 kata_model.eval()
 model_config = kata_model.config
 if swa_model is not None:
@@ -84,7 +96,7 @@ class KataPessimizeDataset(Dataset):
         }
     
 
-dataset = KataPessimizeDataset(DATASET_DIR, n_games=800)
+dataset = KataPessimizeDataset(args.dataset_dir, n_games=800)
 test_frac = 0.1
 train_set, test_set = torch.utils.data.random_split(dataset, [int(len(dataset)*(1-test_frac)), int(len(dataset)*test_frac)])
 
@@ -281,6 +293,8 @@ def loss_fn(policy_probs:Tensor, annotated_values:Tensor, pla:int):
 
 
 def train(wrapped_model:HookedKataGoWrapper, data_loader:DataLoader, n_epochs=1, regularization_lambda=1, lr=0.005, use_wandb=True):
+    print(f"Starting training for {n_epochs} epochs")
+    print(f"with regularization_lambda={regularization_lambda}, lr={lr}")
     if use_wandb:
         wandb.init(project="kata-pessimize")
         wandb.watch(wrapped_model)
@@ -336,7 +350,7 @@ visualize_mask(wrapped_model)
 train_loader = DataLoader(train_set, batch_size=128, shuffle=True, num_workers=0)
 # %%
 # test_loader = DataLoader(test_set, batch_size=256, shuffle=True, num_workers=0)
-train(wrapped_model, train_loader, n_epochs=20, regularization_lambda=0.1, use_wandb=True)
+train(wrapped_model, train_loader, n_epochs=args.n_epochs, lr=args.lr, regularization_lambda=args.regularization_lambda, use_wandb=args.wandb)
 # cProfile.run("train(wrapped_model, data_loader)", "output.pstats")
 
 # %%
