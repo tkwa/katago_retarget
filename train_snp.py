@@ -97,11 +97,11 @@ class KataPessimizeDataset(Dataset):
     
 
 dataset = KataPessimizeDataset(args.dataset_dir, n_games=800)
-test_frac = 0.1
-train_set, test_set = torch.utils.data.random_split(dataset, [int(len(dataset)*(1-test_frac)), int(len(dataset)*test_frac)])
+val_frac = 0.1
+train_set, val_set = torch.utils.data.random_split(dataset, [int(len(dataset)*(1-val_frac)), int(len(dataset)*val_frac)])
 
 # %%
-wrapped_model = HookedKataGoWrapper(kata_model).to(DEVICE)
+wrapped_model = HookedKataGoWrapper(kata_model).to(args.device)
 wrapped_model.freeze_weights()
 
 # %%
@@ -286,13 +286,16 @@ def loss_fn(policy_probs:Tensor, annotated_values:Tensor, pla:int):
     result = (policy_probs * annotated_values).sum(dim=-1)
     return result
 
+def get_losses(model, batch):
+    bin_input_data, global_input_data, pla = batch["bin_input_data"], batch["global_input_data"], batch["pla"]
+    policy_data = get_policy(model, bin_input_data, global_input_data, batch["annotated_values"])
+    losses = loss_fn(policy_data["probs0"], batch["annotated_values"], pla)
+    return losses
 
 
 # %%
 
-
-
-def train(wrapped_model:HookedKataGoWrapper, data_loader:DataLoader, n_epochs=1, regularization_lambda=1, lr=0.005, use_wandb=True):
+def train(wrapped_model:HookedKataGoWrapper, train_loader:DataLoader, val_loader: DataLoader, n_epochs=1, regularization_lambda=1, lr=0.005, use_wandb=True):
     print(f"Starting training for {n_epochs} epochs")
     print(f"with regularization_lambda={regularization_lambda}, lr={lr}")
     if use_wandb:
@@ -305,11 +308,10 @@ def train(wrapped_model:HookedKataGoWrapper, data_loader:DataLoader, n_epochs=1,
             regularization_losses = []
             total_losses = []
             print(f"Starting epoch {epoch}/{n_epochs}")
-            for batch in tqdm(data_loader):
+            for batch in tqdm(train_loader):
+                hooked_model.train()
                 optimizer.zero_grad()
-                bin_input_data, global_input_data, pla = batch["bin_input_data"], batch["global_input_data"], batch["pla"]
-                policy_data = get_policy(hooked_model, bin_input_data, global_input_data, batch["annotated_values"])
-                losses = loss_fn(policy_data["probs0"], batch["annotated_values"], pla)
+                losses = get_losses(hooked_model, batch)
                 regularization_loss = hooked_model.regularization_loss()
                 avg_loss = losses.mean()
                 if epoch==0: print(avg_loss.item())
@@ -319,15 +321,22 @@ def train(wrapped_model:HookedKataGoWrapper, data_loader:DataLoader, n_epochs=1,
                 regrets.append(avg_loss.item())
                 regularization_losses.append(regularization_loss.item())
                 total_losses.append(total_loss.item())
-            print(f"Average loss: {np.mean(regrets)}")
+            print(f"Average regret: {np.mean(regrets)}")
             print(f"Average regularization loss: {np.mean(regularization_losses)}")
             mean_mask_value = torch.tensor([wrapped_model.sample_mask(n).mean() for n in wrapped_model.mask_logits_names]).mean()
             if use_wandb:
-                wandb.log({"regret": np.mean(regrets), "regularization_loss": np.mean(regularization_losses),
+                val_regrets = []
+                for batch in tqdm(val_loader):
+                    hooked_model.eval()
+                    losses = get_losses(hooked_model, batch)
+                    val_regrets.append(losses.mean().item())
+                wandb.log({"regret": np.mean(regrets), "val_regret": np.mean(val_regrets), "regularization_loss": np.mean(regularization_losses),
                     "total_loss": np.mean(total_losses), "mean_mask_value": mean_mask_value})
             if (epoch + 1) % 5 == 0:
                 time_str = time.strftime("%Y%m%d-%H%M%S")
-                torch.save(wrapped_model.state_dict(), f"models/model_{epoch}_{time_str}.pth")
+                state_dict = wrapped_model.state_dict()
+                state_dict["config"] = model_config
+                torch.save(state_dict, f"models/model_{epoch}_{time_str}.pth")
 
     if use_wandb:
         wandb.finish()
@@ -335,39 +344,10 @@ def train(wrapped_model:HookedKataGoWrapper, data_loader:DataLoader, n_epochs=1,
 
 # %%
 
-def visualize_mask(wrapped_model:HookedKataGoWrapper):
-    # Make histograms of mask values
-    fig, axs = plt.subplots(4, 5)
-    for i, ax in enumerate(axs.flat[:len(wrapped_model.mask_logits)]):
-        mask = wrapped_model.sample_mask(wrapped_model.mask_logits_names[i]).detach().cpu().numpy().flatten()
-        ax.hist(mask, bins=20)
-        ax.set_title(f"Layer {i}")
-    plt.show()
-    print(f"Mean mask value: {torch.tensor([wrapped_model.sample_mask(n).mean() for n in wrapped_model.mask_logits_names]).mean()}")
-
-visualize_mask(wrapped_model)
 # %%
 train_loader = DataLoader(train_set, batch_size=128, shuffle=True, num_workers=0)
+val_loader = DataLoader(val_set, batch_size=128, shuffle=True, num_workers=0)
 # %%
 # test_loader = DataLoader(test_set, batch_size=256, shuffle=True, num_workers=0)
-train(wrapped_model, train_loader, n_epochs=args.n_epochs, lr=args.lr, regularization_lambda=args.regularization_lambda, use_wandb=args.wandb)
+train(wrapped_model, train_loader, val_loader, n_epochs=args.n_epochs, lr=args.lr, regularization_lambda=args.regularization_lambda, use_wandb=args.wandb)
 # cProfile.run("train(wrapped_model, data_loader)", "output.pstats")
-
-# %%
-# sns.scatterplot(y=[r.item() for r in regrets], x=np.arange(52, 152), color='blue')
-# sns.scatterplot(y=[r.item() for r in regrets_inverted], x=np.arange(52, 152), color='red')
-# # label this series "regrets":
-# plt.xlabel("move number")
-# plt.ylabel("regret")
-# plt.legend(["normal", "inverted logits"])
-# plt.show()
-# %%
-# Create a pstats object
-# p = pstats.Stats('output.pstats')
-
-# # Sort the statistics by the cumulative time and print the first few lines
-# p.sort_stats('cumulative').print_stats(20)
-# %%
-
-# with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True) as prof:
-#     train(wrapped_model, data_loader)
