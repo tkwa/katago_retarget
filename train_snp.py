@@ -19,7 +19,7 @@ from torch.profiler import profile, record_function, ProfilerActivity
 import wandb
 import argparse
 
-from snp_utils import HookedKataGoWrapper
+from snp_utils import HookedKataGoWrapper, mask_flippedness
 sys.path.append("/home/ubuntu/katago_pessimize/KataGo/python")
 
 from sgfmill import sgf
@@ -331,7 +331,7 @@ def train(wrapped_model:HookedKataGoWrapper, train_loader:DataLoader, val_loader
                     losses = get_losses(hooked_model, batch)
                     val_regrets.append(losses.mean().item())
                 wandb.log({"regret": np.mean(regrets), "val_regret": np.mean(val_regrets), "regularization_loss": np.mean(regularization_losses),
-                    "total_loss": np.mean(total_losses), "mean_mask_value": mean_mask_value})
+                    "total_loss": np.mean(total_losses), "mean_mask_value": mean_mask_value, "flippedness": mask_flippedness(wrapped_model)})
             if (epoch + 1) % 5 == 0:
                 time_str = time.strftime("%Y%m%d-%H%M%S")
                 state_dict = wrapped_model.state_dict()
