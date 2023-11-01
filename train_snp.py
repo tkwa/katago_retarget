@@ -3,29 +3,21 @@ import os
 import sys
 import numpy as np
 import torch
-import math
-import matplotlib.pyplot as plt
-import seaborn as sns
 from torch import Tensor
-from torch.nn.modules.module import Module
-import cProfile
 from torch.utils.data import Dataset, DataLoader
-import transformer_lens as tl
-import json
 import time
-import pstats
 from einops import repeat
-from torch.profiler import profile, record_function, ProfilerActivity
 import wandb
 import argparse
 import gc
+# import cProfile
+# import pstats
+# from torch.profiler import profile, record_function, ProfilerActivity
 
 from snp_utils import HookedKataGoWrapper, mask_flippedness
 sys.path.append("./KataGo/python")
 
-from sgfmill import sgf
 from KataGo.python.board import Board
-from KataGo.python.data import Metadata, load_sgf_moves_exn
 # from KataGo.python.play import get_outputs
 from KataGo.python.load_model import load_model
 from KataGo.python.features import Features
