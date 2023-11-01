@@ -10,13 +10,6 @@ from transformer_lens.hook_points import HookPoint, HookedRootModule
 
 sys.path.append("./KataGo/python")
 from KataGo.python.model_pytorch import Model as KataModel
-from KataGo.python.load_model import load_model
-
-# Import the subnetwork probing module from Automatic-Circuit-Discovery/acdc
-sys.path.append('./Automatic-Circuit-Discovery')
-from subnetwork_probing.train import *
-# sys.path.append('./Automatic-Circuit-Discovery/subnetwork_probing/transformer_lens/transformer_lens')
-# from subnetwork_probing.train import *
 # %%
 
 # SGF_DIR = 'sgf_downloads'
