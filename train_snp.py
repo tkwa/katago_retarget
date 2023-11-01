@@ -38,7 +38,7 @@ CHECKPOINT_FILE = 'kg_checkpoint/kata1-b18c384nbt-s7709731328-d3715293823/model.
 DEVICE = 'cuda'
 pos_len = 19
 
-argparser = argparse.ArgumentParser(
+parser = argparse.ArgumentParser(
     description="Use modified subnetwork probing to train the KataGo policy net to make the worst move")
 
 for k, v in {
@@ -50,9 +50,9 @@ for k, v in {
     "--lr": 0.01,
     "--regularization_lambda": 1,
 }.items():
-    argparser.add_argument(k, default=v)
+    parser.add_argument(k, default=v)
 
-args, unknown = argparser.parse_known_args()
+args, unknown = parser.parse_known_args()
 print(f"args: {args}")
 
 # %%
@@ -307,9 +307,9 @@ def train(wrapped_model:HookedKataGoWrapper, train_loader:DataLoader, val_loader
             regrets = []
             regularization_losses = []
             total_losses = []
+            hooked_model.train()
             print(f"Starting epoch {epoch}/{n_epochs}")
             for batch in tqdm(train_loader):
-                hooked_model.train()
                 optimizer.zero_grad()
                 losses = get_losses(hooked_model, batch)
                 regularization_loss = hooked_model.regularization_loss()
@@ -326,12 +326,13 @@ def train(wrapped_model:HookedKataGoWrapper, train_loader:DataLoader, val_loader
             mean_mask_value = torch.tensor([wrapped_model.sample_mask(n).mean() for n in wrapped_model.mask_logits_names]).mean()
             if use_wandb:
                 val_regrets = []
+                hooked_model.eval()
                 for batch in tqdm(val_loader):
-                    hooked_model.eval()
                     losses = get_losses(hooked_model, batch)
                     val_regrets.append(losses.mean().item())
+                print(f"Average validation regret: {np.mean(val_regrets)}")
                 wandb.log({"regret": np.mean(regrets), "val_regret": np.mean(val_regrets), "regularization_loss": np.mean(regularization_losses),
-                    "total_loss": np.mean(total_losses), "mean_mask_value": mean_mask_value, "flippedness": mask_flippedness(wrapped_model)})
+                    "total_loss": np.mean(total_losses), "mean_mask_value": mean_mask_value, "flippedness": mask_flippedness(wrapped_model).sum()})
             if (epoch + 1) % 5 == 0:
                 time_str = time.strftime("%Y%m%d-%H%M%S")
                 state_dict = wrapped_model.state_dict()
@@ -349,5 +350,5 @@ train_loader = DataLoader(train_set, batch_size=128, shuffle=True, num_workers=0
 val_loader = DataLoader(val_set, batch_size=128, shuffle=True, num_workers=0)
 # %%
 # test_loader = DataLoader(test_set, batch_size=256, shuffle=True, num_workers=0)
-train(wrapped_model, train_loader, val_loader, n_epochs=args.n_epochs, lr=args.lr, regularization_lambda=args.regularization_lambda, use_wandb=args.wandb)
+train(wrapped_model, train_loader, val_loader, n_epochs=int(args.n_epochs), lr=args.lr, regularization_lambda=args.regularization_lambda, use_wandb=args.wandb)
 # cProfile.run("train(wrapped_model, data_loader)", "output.pstats")

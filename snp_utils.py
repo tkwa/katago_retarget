@@ -2,6 +2,7 @@
 from copy import deepcopy
 import sys
 import math
+import numpy as np
 import torch
 from torch import Tensor
 from typing import List, Dict, Tuple, Callable, ContextManager, Self
@@ -144,4 +145,18 @@ class HookedKataGoWrapper(HookedModuleWrapper):
     def freeze_weights(self):
         for p in self.mod.parameters():
             p.requires_grad = False
+
+
+# %%
+
+def mask_flippedness(wrapped_model:HookedKataGoWrapper) -> np.ndarray:
+    """
+    Gives a complexity score to the mask, adjusting the
+    number of things flipped for total number of mask items...
+    """
+    sums = np.zeros(len(wrapped_model.mask_logits))
+    for i, mask_logits in enumerate(wrapped_model.mask_logits):
+        mask = wrapped_model.sample_mask(wrapped_model.mask_logits_names[i]).detach().cpu().numpy().flatten()
+        sums[i] = np.sum((1 - mask) / 2)
+    return sums
 # %%

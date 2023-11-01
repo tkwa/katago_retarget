@@ -1,6 +1,5 @@
 # %%
-from snp_utils import HookedKataGoWrapper
-from KataGo.python.load_model import load_model
+from snp_utils import HookedKataGoWrapper, mask_flippedness
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
@@ -26,18 +25,6 @@ wrapped_model = HookedKataGoWrapper(kata_model).to(DEVICE)
 wrapped_model.load_state_dict(state_dict)
 
 # %%
-
-def mask_flippedness(wrapped_model:HookedKataGoWrapper) -> np.ndarray:
-    """
-    Gives a complexity score to the mask, adjusting the
-    number of things flipped for total number of mask items...
-    """
-    sums = np.zeros(len(wrapped_model.mask_logits))
-    for i, mask_logits in enumerate(wrapped_model.mask_logits):
-        mask = wrapped_model.sample_mask(wrapped_model.mask_logits_names[i]).detach().cpu().numpy().flatten()
-        sums[i] = np.sum((1 - mask) / 2)
-    return sums
-
 mask_flippedness(wrapped_model)
 
 # %%
