@@ -42,6 +42,7 @@ add("--wandb", default=True, type=bool)
 add("--n_epochs", default=100, type=int)
 add("--lr", default=0.01, type=float)
 add("--regularization_lambda", default=1, type=float)
+add("batch_size", default=96, type=int)
 
 args, unknown = parser.parse_known_args()
 print(f"args: {args}")
@@ -336,8 +337,8 @@ def train(wrapped_model:HookedKataGoWrapper, train_loader:DataLoader, val_loader
 # %%
 
 # %%
-train_loader = DataLoader(train_set, batch_size=96, shuffle=True, num_workers=0)
-val_loader = DataLoader(val_set, batch_size=96, shuffle=True, num_workers=0)
+train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=0)
+val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=True, num_workers=0)
 # %%
 gc.collect()
 torch.cuda.empty_cache()
