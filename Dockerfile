@@ -9,9 +9,15 @@ RUN apt-get update -q \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+RUN apt-get update -q && apt-get install -y software-properties-common
+RUN add-apt-repository ppa:deadsnakes/ppa
+RUN apt-get update -q && apt-get install -y python3.11 python3.11-dev python3.11-venv
+# Alias python3.11 to python even though it's not the default
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
+
 # This venv only holds Poetry and its dependencies. They are isolated from the main project dependencies.
 ENV POETRY_HOME="/opt/poetry"
-RUN python3 -m venv $POETRY_HOME \
+RUN python -m venv $POETRY_HOME \
     # Here we use the pip inside $POETRY_HOME but afterwards we should not
     && "$POETRY_HOME/bin/pip" install poetry==1.4.2 \
     && rm -rf "${HOME}/.cache"
