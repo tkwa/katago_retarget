@@ -18,9 +18,10 @@ from einops import repeat
 from torch.profiler import profile, record_function, ProfilerActivity
 import wandb
 import argparse
+import gc
 
 from snp_utils import HookedKataGoWrapper, mask_flippedness
-sys.path.append("/home/ubuntu/katago_pessimize/KataGo/python")
+sys.path.append("./KataGo/python")
 
 from sgfmill import sgf
 from KataGo.python.board import Board
@@ -45,7 +46,7 @@ add = parser.add_argument
 add("--dataset_dir", default=DATASET_DIR)
 add("--checkpoint_file", default=CHECKPOINT_FILE)
 add("--device", default=DEVICE)
-add("--wandb", action="store_true")
+add("--wandb", default=True, type=bool)
 add("--n_epochs", default=100, type=int)
 add("--lr", default=0.01, type=float)
 add("--regularization_lambda", default=1, type=float)
@@ -119,7 +120,7 @@ for i in range(board.arrsize):
 # copied from play
 def get_policy(model:HookedKataGoWrapper, bin_input_data, global_input_data, annotated_values=None):
     """
-    We use annotated_values to ...
+    Runs the KataGo model on the given input data and returns the policy and value.
     """
     # print(f"bin_input_data.shape {bin_input_data.shape}")
     # print(f"global_input_data.shape {global_input_data.shape}")
@@ -130,11 +131,10 @@ def get_policy(model:HookedKataGoWrapper, bin_input_data, global_input_data, ann
     # symmetry = 0
     # model_outputs = model(apply_symmetry(batch["binaryInputNCHW"],symmetry),batch["globalInputNC"])
 
-    with model.hooks() as hooked_model:
-        model_outputs = hooked_model(
-            bin_input_data.to(DEVICE),
-            global_input_data.to(DEVICE),
-        )
+    model_outputs = model(
+        bin_input_data.to(DEVICE),
+        global_input_data.to(DEVICE),
+    )
 
     outputs = model.mod.postprocess_output(model_outputs)
     (
@@ -344,9 +344,10 @@ def train(wrapped_model:HookedKataGoWrapper, train_loader:DataLoader, val_loader
 # %%
 
 # %%
-train_loader = DataLoader(train_set, batch_size=128, shuffle=True, num_workers=0)
-val_loader = DataLoader(val_set, batch_size=128, shuffle=True, num_workers=0)
+train_loader = DataLoader(train_set, batch_size=96, shuffle=True, num_workers=0)
+val_loader = DataLoader(val_set, batch_size=96, shuffle=True, num_workers=0)
 # %%
-# test_loader = DataLoader(test_set, batch_size=256, shuffle=True, num_workers=0)
+gc.collect()
+torch.cuda.empty_cache()
 train(wrapped_model, train_loader, val_loader, n_epochs=int(args.n_epochs), lr=args.lr, regularization_lambda=args.regularization_lambda, use_wandb=args.wandb)
 # cProfile.run("train(wrapped_model, data_loader)", "output.pstats")

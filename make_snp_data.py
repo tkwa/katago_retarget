@@ -17,9 +17,13 @@ from torch import Tensor
 from torch.nn.modules.module import Module
 import transformer_lens as tl
 import json
+from multiprocessing import Pool
+from functools import partial
+import cProfile
+import pstats
 
 from snp_utils import HookedKataGoWrapper
-sys.path.append("/home/ubuntu/katago_pessimize/KataGo/python")
+sys.path.append("./KataGo/python")
 
 from sgfmill import sgf
 from KataGo.python.board import Board
@@ -28,6 +32,7 @@ from KataGo.python.data import Metadata, load_sgf_moves_exn
 from KataGo.python.load_model import load_model
 from KataGo.python.features import Features
 from tqdm import tqdm
+from tqdm.contrib.concurrent import process_map
 
 
 # %%
@@ -38,7 +43,7 @@ ANNOTATIONS_DIR = 'annotations'
 DATASET_DIR = 'dataset'
 CHECKPOINT_FILE = 'kg_checkpoint/kata1-b18c384nbt-s7709731328-d3715293823/model.ckpt'
 DEVICE = 'cuda'
-N_GAMES_IN_DATASET = 1000
+N_GAMES_IN_DATASET = 3
 pos_len = 19
 
 # We load the model just to get bin_input_shape and global_input_shape
@@ -117,7 +122,15 @@ def get_input_data(gs:GameState, rules, cache=True):
 
 # Projected size: 4*22*19*19*100*1000
 
-def process_file(sgf_filename, start_move=52, end_move=152):
+def process_file(annotation_filename, start_move=52, end_move=152, overwrite=None):
+    # if overwrite is None:
+    #     overwrite = '-overwrite' in sys.argv[1:]
+    sgf_filename = annotation_filename[:-7]
+    dataset_filename = sgf_filename + '.npz'
+    dataset_relpath = os.path.join(DATASET_DIR, dataset_filename)
+    if os.path.exists(dataset_relpath) and not overwrite:
+        print(f"Skipping {sgf_filename}")
+        return
     # TODO fix komi and rules when loading?
     metadata, setup, moves, rules = load_sgf_moves_exn(os.path.join(SGF_DIR, sgf_filename))
     # print(f"Loaded {sgf_filename}")
@@ -147,11 +160,10 @@ def process_file(sgf_filename, start_move=52, end_move=152):
             bin_input_data[move_n - start_move], global_input_data[move_n - start_move] = get_input_data(gs, rules)
             pla[move_n - start_move] = gs.board.pla
 
-    nonzero_mask = pla != 0
-    bin_input_data = bin_input_data[nonzero_mask]
-    global_input_data = global_input_data[nonzero_mask]
-    annotated_values = annotated_values[nonzero_mask]
-    pla = pla[nonzero_mask]
+    zero_mask = pla == 0
+    if zero_mask.any():
+        print(f"Skipping {sgf_filename} because it's incomplete")
+        return
 
     # print(policies)
     np.savez(os.path.join(DATASET_DIR, sgf_filename + '.npz'), bin_input_data=bin_input_data, global_input_data=global_input_data, annotated_values=annotated_values, pla=pla)
@@ -159,19 +171,25 @@ def process_file(sgf_filename, start_move=52, end_move=152):
 def make_dataset(overwrite=False):
     if overwrite:
         print("Overwriting dataset")
-    for annotation_filename in tqdm(os.listdir(ANNOTATIONS_DIR)[:N_GAMES_IN_DATASET]):
-        sgf_filename = annotation_filename[:-7]
-        dataset_filename = sgf_filename + '.npz'
-        dataset_relpath = os.path.join(DATASET_DIR, dataset_filename)
-        if os.path.exists(dataset_relpath) and not overwrite:
-            print(f"Skipping {sgf_filename}")
-            continue
-        process_file(sgf_filename)
+    files_to_process = os.listdir(ANNOTATIONS_DIR)[:N_GAMES_IN_DATASET]
+    # with Pool(8) as p, tqdm(total=N_GAMES_IN_DATASET) as pbar:
+        # Using partial to set overwrite for all calls
+    for file in files_to_process:
+        process_file(file, overwrite=overwrite)
+        # p.apply_async(process_file, (file,), {'overwrite': overwrite}, callback=lambda _: pbar.update(1))
+        
 # %%
 
 if __name__ == "__main__":
     args = sys.argv[1:]
-    make_dataset(overwrite='-overwrite' in args)
+    cProfile.run("make_dataset(overwrite=True)", 'output.pstats')
 
 
+# %%
+
+# Create a pstats object
+p = pstats.Stats('output.pstats')
+
+# Sort the statistics by the cumulative time and print the first few lines
+p.sort_stats('tottime').print_stats(20)
 # %%

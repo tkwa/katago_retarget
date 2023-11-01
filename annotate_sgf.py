@@ -16,7 +16,7 @@ from typing import List
 from einops import repeat
 import cProfile
 import pstats
-sys.path.append("/home/ubuntu/katago_pessimize/KataGo/python")
+sys.path.append("./KataGo/python")
 
 # from analysis engine code
 import argparse

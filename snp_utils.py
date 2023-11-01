@@ -8,7 +8,7 @@ from torch import Tensor
 from typing import List, Dict, Tuple, Callable, ContextManager, Self
 from transformer_lens.hook_points import HookPoint, HookedRootModule
 
-sys.path.append("/home/ubuntu/katago_pessimize/KataGo/python")
+sys.path.append("./KataGo/python")
 from KataGo.python.model_pytorch import Model as KataModel
 from KataGo.python.load_model import load_model
 
@@ -49,16 +49,17 @@ class HookedModuleWrapper(HookedRootModule):
         if recursive: self.wrap_hookpoints_recursively()
         self.setup()
 
-    def wrap_hookpoints_recursively(self):
+    def wrap_hookpoints_recursively(self, verbose=False):
+        show = lambda *args: print(*args) if verbose else None
         for key, submod in list(self.mod._modules.items()):
             if isinstance(submod, HookedModuleWrapper):
-                print(f"SKIPPING {key}:{type(submod)}")
+                show(f"SKIPPING {key}:{type(submod)}")
                 continue
             if key in ['intermediate_value_head', 'value_head']: # these return tuples
-                print(f"SKIPPING {key}:{type(submod)}")
+                show(f"SKIPPING {key}:{type(submod)}")
                 continue
             if isinstance(submod, torch.nn.ModuleList):
-                print(f"INDIVIDUALLY WRAPPING {key}:{type(submod)}")
+                show(f"INDIVIDUALLY WRAPPING {key}:{type(submod)}")
                 for i, subsubmod in enumerate(submod):
                     new_submod = HookedModuleWrapper(subsubmod, name=f'{key}.{i}', recursive=True, top_level=False)
                     submod[i] = new_submod

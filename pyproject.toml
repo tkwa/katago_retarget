@@ -15,7 +15,6 @@ seaborn = "^0.13.0"
 matplotlib = "^3.8.1"
 einops = "^0.7.0"
 transformer-lens = "^1.9.0"
-modelconfigs = "
 
 
 [build-system]
