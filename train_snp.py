@@ -40,17 +40,15 @@ pos_len = 19
 
 parser = argparse.ArgumentParser(
     description="Use modified subnetwork probing to train the KataGo policy net to make the worst move")
+add = parser.add_argument
 
-for k, v in {
-    "--dataset_dir": DATASET_DIR,
-    "--checkpoint_file": CHECKPOINT_FILE,
-    "--device": DEVICE,
-    "--wandb": True,
-    "--n_epochs": 100,
-    "--lr": 0.01,
-    "--regularization_lambda": 1,
-}.items():
-    parser.add_argument(k, default=v)
+add("--dataset_dir", default=DATASET_DIR)
+add("--checkpoint_file", default=CHECKPOINT_FILE)
+add("--device", default=DEVICE)
+add("--wandb", action="store_true")
+add("--n_epochs", default=100, type=int)
+add("--lr", default=0.01, type=float)
+add("--regularization_lambda", default=1, type=float)
 
 args, unknown = parser.parse_known_args()
 print(f"args: {args}")
