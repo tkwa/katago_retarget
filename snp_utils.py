@@ -134,12 +134,26 @@ class HookedKataGoWrapper(HookedModuleWrapper):
         # print(f"trying to multiply mask {mask.shape} with hook_point_out {hook_point_out.shape}")
         out = mask * hook_point_out
         return out
+    
+    def binary_activation_mask_hook(self, hook_point_out: torch.Tensor, hook: HookPoint):
+        mask_scores = self._mask_logits_dict[hook.name]
+        mask = 1 - 2 * (mask_scores > 0).float()
+        out = mask * hook_point_out
+        return out
 
-    def fwd_hooks(self) -> List[Tuple[str, Callable]]:
-        return [(n, self.activation_mask_hook) for n in self.mask_logits_names]
+    def fwd_hooks(self, binary=False) -> List[Tuple[str, Callable]]:
+        if binary:
+            return [(n, self.binary_activation_mask_hook) for n in self.mask_logits_names]
+        else:
+            return [(n, self.activation_mask_hook) for n in self.mask_logits_names]
 
-    def with_fwd_hooks(self) -> ContextManager[Self]:
-        return self.hooks(self.fwd_hooks())
+    def with_fwd_hooks(self, binary=False) -> ContextManager[Self]:
+        """
+        Context manager that adds hooks to the model, flipping some activations.
+        binary=True multiplies activations by a hard -1 or 1, rather than a sampled mask;
+        this passes no gradients so use it for inference only.
+        """
+        return self.hooks(self.fwd_hooks(binary=binary))
 
     def freeze_weights(self):
         for p in self.mod.parameters():
