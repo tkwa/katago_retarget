@@ -1,4 +1,7 @@
 # %%
+import sys
+sys.path.append("..")
+sys.path.append("../KataGo/python")
 from snp_utils import HookedKataGoWrapper, mask_flippedness
 import numpy as np
 import torch
@@ -7,8 +10,8 @@ from KataGo.python.model_pytorch import Model
 
 
 # %%
-CHECKPOINT_FILE = 'models/model_34_20231029-094834.pth'
-CONFIG_MODEL_FILE = 'kg_checkpoint/kata1-b18c384nbt-s7709731328-d3715293823/model.ckpt'
+CHECKPOINT_FILE = '../models/model_34_20231029-094834.pth'
+CONFIG_MODEL_FILE = '../kg_checkpoint/kata1-b18c384nbt-s7709731328-d3715293823/model.ckpt'
 DEVICE = 'cuda'
 pos_len = 19
 

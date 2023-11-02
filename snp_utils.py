@@ -16,7 +16,7 @@ from KataGo.python.features import Features
 sys.path.append("./KataGo/python")
 from KataGo.python.model_pytorch import Model as KataModel
 # %%
-
+ 
 # SGF_DIR = 'sgf_downloads'
 # TRAINING_DIR = 'training_data'
 # ANNOTATIONS_DIR = 'annotations'
@@ -145,6 +145,8 @@ class HookedKataGoWrapper(HookedModuleWrapper):
         for p in self.mod.parameters():
             p.requires_grad = False
 
+    def postprocess_output(self, outputs):
+        return self.mod.postprocess_output(outputs)
 
 # %%
 
@@ -203,7 +205,7 @@ class HookedKataTrainingObject:
                 self.loc_to_move_map[entry] = i
 
     # copied from play
-    def get_model_outputs(self, model:HookedKataGoWrapper, bin_input_data, global_input_data, annotated_values=None):
+    def get_model_outputs(self, model:HookedKataGoWrapper | KataModel, bin_input_data, global_input_data, annotated_values=None):
         """
         Runs the KataGo model on the given input data and returns the policy and value.
         """
@@ -221,7 +223,7 @@ class HookedKataTrainingObject:
             global_input_data.to(self.device),
         )
 
-        outputs = model.mod.postprocess_output(model_outputs)
+        outputs = model.postprocess_output(model_outputs)
         (
             policy_logits,      # N, num_policy_outputs, move
             value_logits,       # N, {win,loss,noresult}
@@ -247,7 +249,7 @@ class HookedKataTrainingObject:
 
         policy0 = torch.nn.functional.softmax(policy0_logits,dim=1) # batch, loc
         # policy_inverted = torch.nn.functional.softmax(- policy_logits[0,:], dim=0)
-        value = torch.nn.functional.softmax(value_logits,dim=0).detach().cpu().numpy()
+        value = torch.nn.functional.softmax(value_logits,dim=1).detach().cpu().numpy()
 
         # Assume that all moves are legal and handle illegal moves in loss_fn
         probs0 = torch.zeros((batch_size, self.board.arrsize))
