@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
 import numpy as np
+from scipy.stats import spearmanr
 
 import sys
 sys.path.append("..")
@@ -71,6 +72,8 @@ def compare_model_values(model1, model2, batch) -> np.ndarray:
 
     return outputs1, outputs2
 # %%
+
+
 def scatter(outputs1, outputs2):
     plt.scatter(outputs1, outputs2)
     plt.xlabel("Original value head output")
@@ -80,7 +83,9 @@ def scatter(outputs1, outputs2):
     stacked = np.vstack([outputs1, outputs2])
     # print(f"{stacked.shape=}")
     correlation = torch.corrcoef(torch.tensor(stacked))[0, 1]
+    spearman_correlation = spearmanr(outputs1, outputs2)
     print(f"Correlation: {correlation}")
+    print(f"Spearman correlation: {spearman_correlation}")
 
 
 # %%
