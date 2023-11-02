@@ -25,7 +25,7 @@ Test the hooked model's value head. What's the correlation between the hooked va
 and the original output?
 """
 DATASET_DIR = '../dataset'
-HOOKED_MODEL_FILE = '../models/model_34_20231029-094834.pth'
+HOOKED_MODEL_FILE = '../models/model_34_20231102-063129.pth'
 CHECKPOINT_FILE = '../kg_checkpoint/kata1-b18c384nbt-s7709731328-d3715293823/model.ckpt'
 DEVICE = 'cuda'
 pos_len = 19
@@ -35,7 +35,11 @@ kata_model, swa_model, _ = load_model(CHECKPOINT_FILE, None, device=DEVICE, pos_
 
 # %%
 state_dict = torch.load(HOOKED_MODEL_FILE,map_location="cpu")
-model_config = torch.load(CHECKPOINT_FILE, map_location="cpu")["config"]
+if "config" in state_dict:
+    model_config = state_dict["config"]
+    del state_dict["config"]
+else:
+    model_config = kata_model.config
 inner_model = Model(model_config,pos_len)
 inner_model.initialize()
 wrapped_model = HookedKataGoWrapper(inner_model).to(DEVICE)
