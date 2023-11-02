@@ -1,12 +1,17 @@
 # %%
 from copy import deepcopy
+import os
 import sys
 import math
+from einops import repeat
 import numpy as np
 import torch
 from torch import Tensor
 from typing import List, Dict, Tuple, Callable, ContextManager, Self
+from torch.utils.data import Dataset
 from transformer_lens.hook_points import HookPoint, HookedRootModule
+from KataGo.python.board import Board
+from KataGo.python.features import Features
 
 sys.path.append("./KataGo/python")
 from KataGo.python.model_pytorch import Model as KataModel
@@ -153,4 +158,204 @@ def mask_flippedness(wrapped_model:HookedKataGoWrapper) -> np.ndarray:
         mask = wrapped_model.sample_mask(wrapped_model.mask_logits_names[i]).detach().cpu().numpy().flatten()
         sums[i] = np.sum((1 - mask) / 2)
     return sums
+
+
+class KataPessimizeDataset(Dataset):
+    def __init__(self, data_dir, n_games:None, moves_per_game:int=100):
+        self.data_dir = data_dir
+        self.moves_per_game = moves_per_game
+        self.games = []
+        for filename in os.listdir(data_dir)[:n_games]:
+            if filename.endswith(".npz"):
+                with np.load(os.path.join(data_dir, filename)) as data:
+                    self.games.append({
+                        "bin_input_data": data['bin_input_data'],
+                        "global_input_data": data['global_input_data'],
+                        "annotated_values": data['annotated_values'],
+                        "pla": data['pla'],
+                    })
+        print(f"Loaded {len(self.games)} games from {data_dir}")
+
+    def __len__(self):
+        return len(self.games) * self.moves_per_game
+
+    def __getitem__(self, idx):
+        game = self.games[idx // self.moves_per_game]
+        move = idx % self.moves_per_game
+        return {
+            "bin_input_data": game['bin_input_data'][move],
+            "global_input_data": game['global_input_data'][move],
+            "annotated_values": game['annotated_values'][move],
+            "pla": game['pla'][move],
+        }
+
+# %%
+
+class HookedKataTrainingObject:
+    def __init__(self, config, device, board_size=19):
+        self.device = device
+        self.board = Board(board_size)
+        self.features = Features(config, board_size)
+        self.loc_to_move_map = torch.zeros(362, dtype=torch.int64)
+        for i in range(self.board.arrsize):
+            entry = self.features.loc_to_tensor_pos(i, self.board)
+            if 0 <= entry < 362:
+                self.loc_to_move_map[entry] = i
+
+    # copied from play
+    def get_model_outputs(self, model:HookedKataGoWrapper, bin_input_data, global_input_data, annotated_values=None):
+        """
+        Runs the KataGo model on the given input data and returns the policy and value.
+        """
+        # print(f"bin_input_data.shape {bin_input_data.shape}")
+        # print(f"global_input_data.shape {global_input_data.shape}")
+        model.eval()
+        batch_size = bin_input_data.shape[0]
+
+        # Currently we don't actually do any symmetries
+        # symmetry = 0
+        # model_outputs = model(apply_symmetry(batch["binaryInputNCHW"],symmetry),batch["globalInputNC"])
+
+        model_outputs = model(
+            bin_input_data.to(self.device),
+            global_input_data.to(self.device),
+        )
+
+        outputs = model.mod.postprocess_output(model_outputs)
+        (
+            policy_logits,      # N, num_policy_outputs, move
+            value_logits,       # N, {win,loss,noresult}
+            td_value_logits,    # N, {long, mid, short} {win,loss,noresult}
+            pred_td_score,      # N, {long, mid, short}
+            ownership_pretanh,  # N, 1, y, x
+            pred_scoring,       # N, 1, y, x
+            futurepos_pretanh,  # N, 2, y, x
+            seki_logits,        # N, 4, y, x
+            pred_scoremean,     # N
+            pred_scorestdev,    # N
+            pred_lead,          # N
+            pred_variance_time, # N
+            pred_shortterm_value_error, # N
+            pred_shortterm_score_error, # N
+            scorebelief_logits, # N, 2 * (self.pos_len*self.pos_len + EXTRA_SCORE_DISTR_RADIUS)
+        ) = (x for x in outputs[0]) # batch
+
+        nan_mask = torch.isnan(annotated_values)
+        reshaped_nan_mask = torch.gather(nan_mask, 1, repeat(self.loc_to_move_map, 'loc -> batch loc', batch=batch_size))
+        policy0_logits = policy_logits[:, 0, :] # batch, loc
+        policy0_logits[reshaped_nan_mask] = -torch.inf # Prevent policy from making illegal moves
+
+        policy0 = torch.nn.functional.softmax(policy0_logits,dim=1) # batch, loc
+        # policy_inverted = torch.nn.functional.softmax(- policy_logits[0,:], dim=0)
+        value = torch.nn.functional.softmax(value_logits,dim=0).detach().cpu().numpy()
+
+        # Assume that all moves are legal and handle illegal moves in loss_fn
+        probs0 = torch.zeros((batch_size, self.board.arrsize))
+        for batch_idx in range(batch_size):
+            for i in range(policy0.shape[1]):
+                move = self.features.tensor_pos_to_loc(i,self.board)
+                if i == policy0.shape[1]-1: # pass move
+                    # pass
+                    probs0[batch_idx,Board.PASS_LOC] = policy0[batch_idx,i]
+                else: # elif board.would_be_legal(board.pla,move):
+                    probs0[batch_idx,move] = policy0[batch_idx,i]
+
+        # probs_inverted = torch.zeros(board.arrsize)
+        # for i in range(len(policy_inverted)):
+        #     move = features.tensor_pos_to_loc(i,board)
+        #     if i == len(policy_inverted)-1:
+        #         pass
+        #         # probs_inverted[Board.PASS_LOC] = policy_inverted[i]
+        #     else: # elif board.would_be_legal(board.pla,move):
+        #         probs_inverted[move] = policy_inverted[i]
+
+        nan_probs = torch.isnan(probs0).sum()
+        if nan_probs > 0:
+            print(f"Warning: probs0 has {nan_probs} nan values")
+
+        return {
+            "policy0": policy0,
+            # "policy_inverted": policy_inverted,
+            # "policy1": policy1,
+            "probs0": probs0,
+            # "probs_inverted": probs_inverted,
+            # "moves_and_probs1": moves_and_probs1,
+            "value": value,
+
+            # "td_value": td_value,
+            # "td_value2": td_value2,
+            # "td_value3": td_value3,
+            # "scoremean": scoremean,
+            # "td_score": td_score,
+            # "scorestdev": scorestdev,
+            # "lead": lead,
+            # "vtime": vtime,
+            # "estv": estv,
+            # "ests": ests,
+            # "ownership": ownership,
+            # "ownership_by_loc": ownership_by_loc,
+            # "scoring": scoring,
+            # "scoring_by_loc": scoring_by_loc,
+            # "futurepos": futurepos,
+            # "futurepos0_by_loc": futurepos0_by_loc,
+            # "futurepos1_by_loc": futurepos1_by_loc,
+            # "seki": seki,
+            # "seki_by_loc": seki_by_loc,
+            # "seki2": seki2,
+            # "seki_by_loc2": seki_by_loc2,
+            # "scorebelief": scorebelief,
+            # "genmove_result": genmove_result
+        }
+
+    def loss_fn(self, policy_probs:Tensor, annotated_values:Tensor, pla:int):
+        """
+        Calculates regret for a given policy.
+        Here regret means how far we are off the WORST move.
+        Inputs:
+            policy_probs: Tensor of shape (batch_size, board.arrsize)
+            annotated_values: Tensor of shape (batch_size, board.arrsize)
+            pla: array of (hopefully) 1s and 2s, shape (batch_size,)
+        """
+        if policy_probs.shape != annotated_values.shape:
+            raise Exception(f"policy_probs.shape {policy_probs.shape} != annotated_values.shape {annotated_values.shape}")
+        bad_pla_mask = ~((pla == 1) | (pla == 2))
+        if bad_pla_mask.any():
+            raise ValueError(f"pla has values other than 1 or 2 at {bad_pla_mask.nonzero().tolist()}")
+            annotated_values[bad_pla_mask] = 0
+
+        annotated_values[pla == 2] = 1 - annotated_values[pla == 2]
+        # Policy should be 0 wherever annotated value is nan
+        nan_mask = torch.isnan(annotated_values)
+        # print(f"nan values: {nan_mask.sum(dim=-1)}")
+        # for i in range(nan_mask.shape[0]):
+        #     total_nonnan_prob = policy_probs[i][~nan_mask[i]].sum()
+        #     if total_nonnan_prob < 0.5:
+        #         print(f"Warning: total_nonnan_prob={total_nonnan_prob} at {i}")
+        #         print(f"nans")
+        #         print_board_template(nan_mask[i])
+        #         # print(f"{policy_probs[i]=}")
+        #         policy_mask = (policy_probs[i] > 1e-3)
+        #         print(f"policy > 1e-3:")
+        #         print_board_template(policy_mask)
+        #         print(f"policy & nans:")
+        #         print_board_template(policy_mask & nan_mask[i])
+            # if policy_probs[i][nan_mask].nonzero().shape[0] != 0:
+            #     bad_list = policy_probs[i][nan_mask].nonzero()
+            #     print(f"Warning: policy_probs has non-zero values where annotated_values is nan, at {bad_list.numel()} locations {bad_list.tolist()}")
+
+        annotated_values = torch.nan_to_num(annotated_values, nan=torch.inf)
+        annotated_values = annotated_values - annotated_values.min() # regrets
+        annotated_values[nan_mask] = 0
+        policy_probs[nan_mask] = 0 # Assume policy never makes illegal moves
+        if (policy_probs.sum(dim=-1) - 1).abs().max() > 1e-3:
+            print(f"Warning: sum(probs) != 1; range={policy_probs.sum(dim=-1).min(), policy_probs.sum(dim=-1).max()}")
+        policy_probs *= 1 / policy_probs.sum(dim=-1, keepdim=True)
+        result = (policy_probs * annotated_values).sum(dim=-1)
+        return result
+
+    def get_losses(self, model, batch):
+        bin_input_data, global_input_data, pla = batch["bin_input_data"], batch["global_input_data"], batch["pla"]
+        policy_data = self.get_model_outputs(model, bin_input_data, global_input_data, batch["annotated_values"])
+        losses = self.loss_fn(policy_data["probs0"], batch["annotated_values"], pla)
+        return losses
 # %%
