@@ -1,8 +1,6 @@
 sgf_downloads/
 analysis_logs/
 annotations/
-dataset/
 models/
-wandb/
 kg_release/
 Automatic-Circuit-Discovery/

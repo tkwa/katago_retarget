@@ -1,0 +1,94 @@
+# apiVersion: v1
+# kind: PersistentVolumeClaim
+# metadata:
+#   name: katago-pessimize-checkpoints 
+# spec:
+#   accessModes:
+#   - ReadWriteMany
+#   resources:
+#     requests:
+#       storage: 50Gi
+#     limits:
+#       storage: 50Gi
+#   storageClassName: nfs-client
+# ---
+# # A shared cache for hf artifacts. We don't want every job downloading its own copy of llama 2.
+# apiVersion: v1 
+# kind: PersistentVolumeClaim
+# metadata:
+#   name: hf-cache
+# spec:
+#   accessModes:
+#   - ReadWriteMany
+#   resources:
+#     requests:
+#       storage: 100Gi
+#     limits:
+#       storage: 100Gi
+#   storageClassName: nfs-client
+---
+# The corresponding secrets for this job can be generated with:
+# `kubectl create secret generic wandb --from-literal=api_key=<your-api-key>`
+# `kubectl create secret generic hf-hub --from-literal=api_key=<your-api-key>`
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: katago-snp- # use a partially random name
+  labels:
+    kueue.x-k8s.io/queue-name: farai
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      priorityClassName: normal-batch
+      volumes:
+      - name: checkpoints
+        persistentVolumeClaim:
+          claimName: katago-pessimize-checkpoints
+      # - name: cache
+      #   persistentVolumeClaim:
+      #     claimName: hf-cache
+      restartPolicy: Never
+      containers:
+      - name: trainer
+        image: ghcr.io/tkwa/katago_pessimize:v4
+        resources:
+          requests:
+            cpu: 12
+            memory: "30G"
+          limits:
+            memory: "128G"
+            nvidia.com/gpu: 1
+        volumeMounts:
+          - name: checkpoints
+            mountPath: /models
+          # - name: cache
+          #   mountPath: /root/.cache
+        env:
+        - name: RUN_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: WANDB_ENTITY
+          value: tkwa-team
+        - name: WANDB_PROJECT
+          value: kata-pessimize
+        - name: WANDB_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: wandb
+              key: api_key
+        - name: HUGGING_FACE_HUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-hub
+              key: api_key
+        command: ["/bin/bash"]
+        args:
+          - "-c"
+          - |
+            python \
+            train_snp.py
+            --n_epochs=50
+            --batch_size=256
+            --lr=0.1

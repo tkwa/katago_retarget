@@ -10,10 +10,10 @@ from torch import Tensor
 from typing import List, Dict, Tuple, Callable, ContextManager, Self
 from torch.utils.data import Dataset
 from transformer_lens.hook_points import HookPoint, HookedRootModule
+sys.path.append("./KataGo/python")
 from KataGo.python.board import Board
 from KataGo.python.features import Features
 
-sys.path.append("./KataGo/python")
 from KataGo.python.model_pytorch import Model as KataModel
 # %%
  

@@ -46,9 +46,6 @@ args, unknown = parser.parse_known_args()
 kata_model, swa_model, _ = load_model(args.checkpoint_file, None, device=args.device, pos_len=pos_len, verbose=True)
 kata_model.eval()
 model_config = kata_model.config
-if swa_model is not None:
-    kata_model = swa_model.module
-    kata_model.eval()
 
 # %%
 
@@ -61,22 +58,6 @@ wrapped_model = HookedKataGoWrapper(kata_model).to(args.device)
 wrapped_model.freeze_weights()
 
 # %%
-
-# def print_board_template(arr, size=19):
-#     board = Board(size)
-#     board.board = arr
-#     # result = np.zeros((size+2, size+1), dtype=int)
-#     # for y in range(size + 2):
-#     #     for x in range(size + 1):
-#     #         board[y, x] = arr[board.loc(x-1, y-1)]
-#     print(board.to_string())
-#     print()
-
-# print_board_template(19)
-
-
-# %%
-
 def train(wrapped_model:HookedKataGoWrapper, train_loader:DataLoader, val_loader: DataLoader, n_epochs=1, regularization_lambda=1, lr=0.005, use_wandb=True):
     print(f"Starting training for {n_epochs} epochs")
     if use_wandb:
@@ -97,7 +78,7 @@ def train(wrapped_model:HookedKataGoWrapper, train_loader:DataLoader, val_loader
                 losses = training_object.get_losses(hooked_model, batch)
                 regularization_loss = hooked_model.regularization_loss()
                 avg_loss = losses.mean()
-                if epoch==0: print(avg_loss.item())
+                # if epoch==0: print(avg_loss.item())
                 total_loss = regularization_lambda * regularization_loss + avg_loss
                 total_loss.backward()
                 optimizer.step()
@@ -124,7 +105,6 @@ def train(wrapped_model:HookedKataGoWrapper, train_loader:DataLoader, val_loader
 
     if use_wandb:
         wandb.finish()
-
 
 # %%
 
