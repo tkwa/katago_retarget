@@ -51,7 +51,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: trainer
-        image: ghcr.io/tkwa/katago_pessimize:v4
+        image: ghcr.io/tkwa/katago_pessimize:v5
         resources:
           requests:
             cpu: 12
@@ -88,7 +88,8 @@ spec:
           - "-c"
           - |
             python \
-            train_snp.py
-            --n_epochs=50
-            --batch_size=256
-            --lr=0.1
+            train_snp.py \
+            --n_epochs=50 \
+            --batch_size=256 \
+            --lr=0.1 \
+            --loader_threads=4

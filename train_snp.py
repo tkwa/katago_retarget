@@ -38,6 +38,7 @@ add("--n_epochs", default=100, type=int)
 add("--lr", default=0.01, type=float)
 add("--regularization_lambda", default=1, type=float)
 add("--batch_size", default=96, type=int)
+add("--loader_threads", default=0, type=int)
 
 args, unknown = parser.parse_known_args()
 
@@ -49,6 +50,7 @@ model_config = kata_model.config
 
 # %%
 
+torch.random.manual_seed(0)
 dataset = KataPessimizeDataset(args.dataset_dir, n_games=800)
 val_frac = 0.1
 train_set, val_set = torch.utils.data.random_split(dataset, [int(len(dataset)*(1-val_frac)), int(len(dataset)*val_frac)])
@@ -109,8 +111,8 @@ def train(wrapped_model:HookedKataGoWrapper, train_loader:DataLoader, val_loader
 # %%
 
 # %%
-train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=0)
-val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=True, num_workers=0)
+train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=args.loader_threads)
+val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=True, num_workers=args.loader_threads)
 print(f"{'not using' if args.no_wandb else 'using'} wandb")
 # %%
 gc.collect()
