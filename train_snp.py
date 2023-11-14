@@ -34,6 +34,7 @@ add("--dataset_dir", default=DATASET_DIR)
 add("--checkpoint_file", default=CHECKPOINT_FILE)
 add("--device", default=DEVICE)
 add("--no_wandb", action="store_true")
+add("--n_games", default=800, type=int)
 add("--n_epochs", default=100, type=int)
 add("--lr", default=0.01, type=float)
 add("--regularization_lambda", default=1, type=float)
@@ -51,7 +52,7 @@ model_config = kata_model.config
 # %%
 
 torch.random.manual_seed(0)
-dataset = KataPessimizeDataset(args.dataset_dir, n_games=800)
+dataset = KataPessimizeDataset(args.dataset_dir, n_games=args.n_games)
 val_frac = 0.1
 train_set, val_set = torch.utils.data.random_split(dataset, [int(len(dataset)*(1-val_frac)), int(len(dataset)*val_frac)])
 

@@ -42,6 +42,9 @@ spec:
     spec:
       priorityClassName: normal-batch
       volumes:
+      # - name: dshm
+      #   emptyDir:
+      #     medium: Memory
       - name: checkpoints
         persistentVolumeClaim:
           claimName: katago-pessimize-checkpoints
@@ -51,7 +54,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: trainer
-        image: ghcr.io/tkwa/katago_pessimize:v5
+        image: ghcr.io/tkwa/katago_pessimize:v6
         resources:
           requests:
             cpu: 12
@@ -62,9 +65,13 @@ spec:
         volumeMounts:
           - name: checkpoints
             mountPath: /models
+          # - name: dshm
+          #   mountPath: /dev/shm
           # - name: cache
           #   mountPath: /root/.cache
         env:
+        # - name: OMP_NUM_THREADS
+        #   value: 12
         - name: RUN_ID
           valueFrom:
             fieldRef:
@@ -87,9 +94,11 @@ spec:
         args:
           - "-c"
           - |
-            python \
+            python -m cProfile \
             train_snp.py \
-            --n_epochs=50 \
+            --n_games=10
+            --n_epochs=1 \
             --batch_size=256 \
-            --lr=0.1 \
-            --loader_threads=4
+            --lr=0.05 \
+            --loader_threads=0 \
+            > models/output.pstats
